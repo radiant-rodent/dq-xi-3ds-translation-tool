@@ -1,0 +1,33 @@
+# Game images / ROMs (copyrighted - never commit)
+*.3ds
+*.cia
+*.cxi
+*.cci
+*.app
+*.pak
+
+# Local tooling / agent config
+.claude/
+
+# Project working data (contains secrets.json, extracted game data)
+workspace/
+
+# Emulator binaries, user data and configs
+_emutest/
+
+# Secrets
+secrets.json
+*.env
+.env*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
