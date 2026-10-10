@@ -331,7 +331,7 @@ def _postprocess(project: Project, source: str, english: str, sid: int | None = 
                .replace("’", "'").replace("…", "...").replace("—", "-").replace("–", "-")
                .replace(" ", " "))
     english = strip_dialogue_quotes(source, english)
-    # the game fonts have no accented letters or hearts: é -> e, æ -> ae, ♥ -> ♪ (before wrapping)
+    # letters/symbols the game font lacks: é -> e (Japanese font only), æ -> ae, ♥ -> ♪ (before wrapping)
     english = fold_to_font(english, _font(project))
     box = _boxes(project).get(sid, source) if sid is not None else None
     if "\n" in source or (box and box["lines"] > 1):
@@ -418,7 +418,7 @@ def _user_payload(items: list[dict]) -> str:
 
 def _font(project: Project):
     # the editor's "too wide" warning is measured with this font, so the budget uses it too
-    return FontSet.get(project.rom_path).fonts["3D14"]
+    return FontSet.for_project(project).fonts["3D14"]
 
 
 def _boxes(project: Project) -> boxfit.BoxIndex:

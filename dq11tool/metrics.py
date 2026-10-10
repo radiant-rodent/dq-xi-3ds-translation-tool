@@ -6,12 +6,14 @@ Japanese line used.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import re
 import struct
 import threading
 import zlib
 
+from . import fontimport
 from .bffnt import Bffnt
 from .ctr.formats import open_image
 from .fontpatch import patch_font
@@ -21,12 +23,14 @@ VAR_WIDTH_CHARS = 8          # assumed length of a runtime variable (name, item.
 
 
 class FontSet:
-    """Fonts loaded from the ROM, patched like the exporter does."""
+    """Fonts loaded from the ROM, patched like the exporter does (imported Latin glyphs from
+    `donor`, then the width fixes)."""
 
     _lock = threading.Lock()
-    _cache: dict[str, "FontSet"] = {}
+    _cache: dict[tuple, "FontSet"] = {}
 
-    def __init__(self, rom_path: str):
+    def __init__(self, rom_path: str, donor: bytes | None = None, cache_dir: str | None = None):
+        self.key = hashlib.sha1(donor).hexdigest()[:10] if donor else "orig"
         self.raw: dict[str, bytes] = {}
         self.fonts: dict[str, Bffnt] = {}
         f, ncsd, ncch = open_image(rom_path)
@@ -35,19 +39,27 @@ class FontSet:
             for x in r.files:
                 if x.path.startswith("/font/") and x.path.endswith(".bffnt"):
                     name = x.path.rsplit("/", 1)[-1][:-6]
-                    data = patch_font(r.read_file(x))
+                    data = patch_font(fontimport.apply(name, r.read_file(x), donor, cache_dir))
                     self.raw[name] = data
                     self.fonts[name] = Bffnt.parse(data)
         finally:
             f.close()
 
     @classmethod
-    def get(cls, rom_path: str) -> "FontSet":
+    def get(cls, rom_path: str, donor: bytes | None = None, cache_dir: str | None = None) -> "FontSet":
+        key = (rom_path, hashlib.sha1(donor).hexdigest() if donor else None)
         with cls._lock:
-            fs = cls._cache.get(rom_path)
+            fs = cls._cache.get(key)
             if fs is None:
-                fs = cls._cache[rom_path] = FontSet(rom_path)
+                fs = cls._cache[key] = FontSet(rom_path, donor, cache_dir)
             return fs
+
+    @classmethod
+    def for_project(cls, project) -> "FontSet":
+        """The fonts the exporter will write for this project."""
+        import os
+        return cls.get(project.rom_path, fontimport.active_donor(project),
+                       os.path.join(project.workdir, "cache"))
 
 
 def _visible_units(text: str):
@@ -98,8 +110,9 @@ def measure(text: str, font: Bffnt) -> dict:
             "lines_per_page": len(lines), "waits": text.count("{CR}")}
 
 
-# The game fonts have no accented letters at all (the official PC names use é, ì, æ, ñ, ö ...)
-# and no heart or arrow symbols. Characters a font lacks are replaced before they reach the game.
+# The Japanese game fonts have no accented letters at all (the official PC names use é, ì, æ,
+# ñ, ö ...) and no heart or arrow symbols; with an imported Latin font (fontimport) the accented
+# letters exist. Characters a font lacks are replaced before they reach the game.
 _FOLD_SPECIAL = {
     "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe", "ø": "o", "Ø": "O", "ß": "ss", "ð": "d", "þ": "th",
     "¡": "", "¿": "", "♥": "♪", "♡": "♪", "❤": "♪", "↑": "^", "↓": "v", "←": "<", "→": ">",
@@ -273,7 +286,7 @@ def font_meta(data: bytes) -> dict:
         wd = font.widths.get(gi, font.default_width)
         sheet, rem = divmod(gi, per_sheet)
         row, col = divmod(rem, si["cols"])
-        glyphs[cp] = [sheet, col * (si["cell_w"] + 1), row * (si["cell_h"] + 1),
+        glyphs[cp] = [sheet, col * (si["cell_w"] + 1) + 1, row * (si["cell_h"] + 1) + 1,
                       wd.left, wd.glyph_width, wd.char_width]
     return {"cell_w": si["cell_w"], "cell_h": si["cell_h"], "baseline": si["baseline"],
             "line_feed": font.line_feed, "height": font.height, "sheets": si["sheets"],

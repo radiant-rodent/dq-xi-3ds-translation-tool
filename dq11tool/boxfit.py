@@ -123,7 +123,7 @@ class BoxIndex:
 
 def index(project, font) -> BoxIndex:
     """Built once per workspace (source texts never change after extraction)."""
-    key = project.db_path
+    key = (project.db_path, id(font))     # fonts are cached for the process lifetime
     with _lock:
         if key not in _cache:
             _cache[key] = BoxIndex(project.db(), font)
@@ -135,4 +135,5 @@ def reset(project=None):
         if project is None:
             _cache.clear()
         else:
-            _cache.pop(project.db_path, None)
+            for k in [k for k in _cache if k[0] == project.db_path]:
+                del _cache[k]

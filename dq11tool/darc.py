@@ -80,3 +80,38 @@ class Sarc:
             struct.pack_into("<II", out, nodes_off + i * 16 + 8, s, s + len(data))
         struct.pack_into("<I", out, 8, len(out))
         return bytes(out)
+
+
+def darc_files(data: bytes) -> list[tuple[str, bytes]]:
+    """Files of a 'darc' archive (older layout archive, e.g. Dragon Quest VII's /LAYOUT/*.arc).
+
+      header (0x1C): magic, u16 BOM, u16 header size, u32 version, u32 file size,
+                     u32 table offset, u32 table length, u32 data offset
+      table: 12-byte entries (u32 name offset | 0x01000000 for folders, u32 offset/parent,
+             u32 size/next index), entry 0 is the root and its 'next' is the entry count;
+             UTF-16 names follow the entries
+    """
+    if data[:4] != b"darc":
+        raise ValueError("not a darc archive")
+    toff = struct.unpack_from("<I", data, 0x10)[0]
+    count = struct.unpack_from("<I", data, toff + 8)[0]
+    names = toff + count * 12
+
+    def name_at(o: int) -> str:
+        p = e = names + o
+        while data[e:e + 2] != b"\0\0":
+            e += 2
+        return data[p:e].decode("utf-16-le")
+
+    out, stack = [], []   # stack: (end index, folder name)
+    for i in range(1, count):
+        while stack and i >= stack[-1][0]:
+            stack.pop()
+        name_off, a, b = struct.unpack_from("<III", data, toff + i * 12)
+        name = name_at(name_off & 0xFFFFFF)
+        if name_off & 0x01000000:
+            stack.append((b, name))
+        else:
+            parts = [s[1] for s in stack if s[1] not in ("", ".")] + [name]
+            out.append(("/".join(parts), data[a:a + b]))
+    return out

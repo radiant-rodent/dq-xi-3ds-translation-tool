@@ -11,7 +11,7 @@ import traceback
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
-from . import boxfit, pcref
+from . import boxfit, fontimport, pcref
 from .categories import CATEGORY_ORDER
 from .export import ExportOptions, run_export, validate
 from .metrics import FontSet, font_meta, measure, sheet_png, wrap
@@ -66,7 +66,7 @@ def create_app(workdir: str) -> Flask:
     jobs = Jobs()
 
     def fonts() -> FontSet:
-        return FontSet.get(project.rom_path)
+        return FontSet.for_project(project)
 
     def main_font():
         return fonts().fonts["3D14"]
@@ -84,7 +84,7 @@ def create_app(workdir: str) -> Flask:
         """Ids of translated strings with a problem; recomputed only when translations changed."""
         db = project.db()
         key = tuple(db.execute("SELECT COUNT(*), MAX(updated), SUM(LENGTH(translation)) FROM source"
-                               " WHERE translation IS NOT NULL AND translation != ''").fetchone())
+                               " WHERE translation IS NOT NULL AND translation != ''").fetchone()) + (fonts().key,)
         with problem_lock:
             if problem_cache["key"] != key:
                 font = main_font()
@@ -127,6 +127,11 @@ def create_app(workdir: str) -> Flask:
             root.attributes("-topmost", True)
             if kind == "dir":
                 result["path"] = filedialog.askdirectory(parent=root, title="Choose a folder")
+            elif kind == "donor":
+                result["path"] = filedialog.askopenfilename(
+                    parent=root, title="Choose a European 3DS game (e.g. Dragon Quest VII) or a font file",
+                    filetypes=[("3DS game image / font", "*.3ds *.cci *.bcfnt *.bffnt *.arc"),
+                               ("All files", "*.*")])
             elif kind == "pak":
                 result["path"] = filedialog.askopenfilename(
                     parent=root, title="Choose the Japanese text .pak",
@@ -434,7 +439,7 @@ def create_app(workdir: str) -> Flask:
         fs = fonts()
         if name not in fs.raw:
             return jsonify({"error": "unknown font"}), 404
-        return jsonify(font_meta(fs.raw[name]))
+        return jsonify({**font_meta(fs.raw[name]), "key": fs.key})
 
     @app.get("/api/font/<name>/sheet<int:idx>.png")
     def font_sheet(name, idx):
@@ -443,11 +448,40 @@ def create_app(workdir: str) -> Flask:
             return Response(status=404)
         cache = os.path.join(project.workdir, "cache")
         os.makedirs(cache, exist_ok=True)
-        path = os.path.join(cache, f"font_{name}_{idx}.png")
+        path = os.path.join(cache, f"font_{name}_{fs.key}_{idx}.png")
         if not os.path.exists(path):
             with open(path, "wb") as fp:
                 fp.write(sheet_png(fs.raw[name], idx))
         return send_from_directory(cache, os.path.basename(path), max_age=3600)
+
+    # ------------------------------------------------------------------ imported Latin font
+    def donor_state():
+        return {"donor": fontimport.donor_info(project.workdir), "enabled": fontimport.enabled(project)}
+
+    @app.get("/api/font/donor")
+    def donor_get():
+        return jsonify(donor_state())
+
+    @app.post("/api/font/donor")
+    def donor_set():
+        body = request.json or {}
+        if body.get("path"):
+            if project.rom_path and os.path.normcase(os.path.abspath(body["path"])) == \
+                    os.path.normcase(os.path.abspath(project.rom_path)):
+                return jsonify({"error": "choose another game: Dragon Quest XI's own fonts are the ones being replaced"}), 400
+            try:
+                fontimport.install_donor(project.workdir, body["path"])
+            except (OSError, ValueError) as e:
+                return jsonify({"error": str(e)}), 400
+        if "enabled" in body:
+            project.config["latin_font"] = bool(body["enabled"])
+            project.save_config()
+        return jsonify(donor_state())
+
+    @app.delete("/api/font/donor")
+    def donor_delete():
+        fontimport.remove_donor(project.workdir)
+        return jsonify(donor_state())
 
     # ------------------------------------------------------------------ glossary
     @app.get("/api/glossary")

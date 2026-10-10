@@ -383,7 +383,7 @@ function loadFont(name) {
       const meta = await api(`/api/font/${name}/meta`);
       meta.images = await Promise.all(Array.from({ length: meta.sheets }, (_, i) => {
         const img = new Image();
-        img.src = `/api/font/${name}/sheet${i}.png`;
+        img.src = `/api/font/${name}/sheet${i}.png?v=${meta.key}`;
         return img.decode().then(() => img);
       }));
       return meta;
@@ -745,7 +745,31 @@ $("#import-btn").onclick = async () => {
 async function loadBuild() {
   const d = await api("/api/build/defaults");
   $("#out-dir").value = d.output_dir;
+  showDonor(await api("/api/font/donor"));
 }
+function showDonor(d) {
+  const cb = $("#latin-font");
+  cb.disabled = !d.donor;
+  cb.checked = !!d.donor && d.enabled;
+  $("#donor-msg").className = "msg";
+  $("#donor-msg").textContent = d.donor
+    ? `Using ${d.donor.font ? d.donor.font.split("/").pop() : "imported font"}` +
+      (d.donor.height ? ` (${d.donor.height} px, ${d.donor.characters} characters)` : "")
+    : "No Latin font imported: choose Dragon Quest VII (Europe) or another European 3DS game.";
+  state.fonts = {};            // previews and widths now use the other font
+}
+$("#donor-browse").onclick = async () => {
+  const r = await api("/api/browse", { json: { kind: "donor" } });
+  if (!r.path) return;
+  $("#donor-msg").className = "msg";
+  $("#donor-msg").textContent = "Searching for a Latin font…";
+  try { showDonor(await api("/api/font/donor", { json: { path: r.path, enabled: true } })); }
+  catch (e) { $("#donor-msg").className = "msg err"; $("#donor-msg").textContent = e.message; }
+};
+$("#latin-font").onchange = async (ev) => {
+  try { showDonor(await api("/api/font/donor", { json: { enabled: ev.target.checked } })); }
+  catch (e) { $("#donor-msg").className = "msg err"; $("#donor-msg").textContent = e.message; }
+};
 $("#out-browse").onclick = async () => { const r = await api("/api/browse", { json: { kind: "dir" } }); if (r.path) $("#out-dir").value = r.path; };
 $("#build-btn").onclick = async () => {
   const opts = {};

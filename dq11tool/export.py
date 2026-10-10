@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from . import blz, cnut, codestr
+from . import blz, cnut, codestr, fontimport
 from .bflyt import Bflyt
 from .bxon import Bxon
 from .ctr.build import build_image, verify_image
@@ -101,7 +101,7 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
 
     by_file: dict[str, list] = defaultdict(list)
     from .metrics import FontSet, fold_to_font
-    game_font = FontSet.get(project.rom_path).fonts["3D14"]
+    game_font = FontSet.for_project(project).fonts["3D14"]
     folded = []
     for r in rows:
         r = dict(r)
@@ -165,15 +165,21 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
                 romfs_repl[path] = fp.read()
             report.files_changed.append(path + " (override)")
 
-        # fonts
-        if opts.font_fixes:
+        # fonts: narrow Latin glyphs from the donor font (project setting), then width fixes
+        donor = fontimport.active_donor(project)
+        if opts.font_fixes or donor:
+            cache_dir = os.path.join(project.workdir, "cache")
             for path in files:
                 if path.startswith("/font/") and path.endswith(".bffnt") and path not in overrides:
                     data = romfs.read_file(files[path])
-                    patched = patch_font(data)
+                    name = path.rsplit("/", 1)[-1][:-6]
+                    patched = fontimport.apply(name, data, donor, cache_dir)
+                    imported = patched != data
+                    if opts.font_fixes:
+                        patched = patch_font(patched)
                     if patched != data:
                         romfs_repl[path] = patched
-                        report.files_changed.append(path + " (font fix)")
+                        report.files_changed.append(path + (" (Latin font)" if imported else " (font fix)"))
 
         # executable strings
         code_rows = by_file.get("exefs:.code", [])
