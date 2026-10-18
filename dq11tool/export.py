@@ -24,14 +24,19 @@ from .textcodec import encode_str, tags_of
 @dataclass
 class ExportOptions:
     include_drafts: bool = True          # export machine/draft translations too
-    expand_text_buffers: float = 2.0     # multiply UI text box buffers (1 = off)
+    # Multiply UI text box buffers (1 = off: bflyt._rebuild_txt1 already grows static labels to fit
+    # their English text, and 0x3A7A2C dynamically reallocates runtime text panes on demand; x2
+    # wasted up to 1 MB of UI layout heap in non-menu packs like dive_dugeon_2way / battle / equip)
+    expand_text_buffers: float = 1.0
     # Minimum UI text buffer in bytes (0 = off). Almost every text box is below 64 bytes, so a
     # minimum grows all of them and overflows the game's layout heap (crash when entering the
-    # first field area); x2 alone was tested to be safe.
+    # first field area).
     min_text_buffer: int = 0
-    # Minimum buffer (bytes) of the text panes that are not numbers: a party name set directly
-    # (txt_name, list items) is expanded in the pane's buffer (namefix.py); 22 = 10 units + NUL
-    name_buffer: int = 22
+    # Minimum buffer (bytes) of the text panes that are not numbers (0 = off: sstub in
+    # grammar_asm.py adds +8 units at runtime whenever 0x3A7A2C sees a {v:N} tag or party name
+    # code; setting 22 on every pane grew 1,103 panes in common_2way.pack by 1.58 MB of vertex
+    # buffers and overflowed the UI heap when buying items in the Cobblestone shop)
+    name_buffer: int = 0
     font_fixes: bool = True              # narrow over-wide ASCII glyph advances in fonts
     make_3ds: bool = True
     make_layeredfs: bool = True
@@ -223,9 +228,9 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
                         report.warnings.append({"entry": None, "text": rel,
                                                 "problem": "override file does not exist in the game RomFS (ignored)"})
 
-        # which packs need a rebuild: translated ones + all layout packs (buffer expansion)
+        # which packs need a rebuild: translated ones + all layout packs (buffer expansion / runtime_fit)
         layout_packs = set()
-        if opts.expand_text_buffers > 1 or opts.min_text_buffer:
+        if opts.expand_text_buffers > 1 or opts.min_text_buffer or opts.runtime_fit:
             layout_packs = set(project_meta(project, "layout_packs", []))
         help_packs = {p for p in files if os.path.basename(p) in MENU_PACKS} if help_factor > 1 else set()
         targets = sorted((set(by_file) - {"exefs:.code"}) | layout_packs | help_packs)
@@ -644,7 +649,7 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
                 applied = len(repl) - len(b.skipped)
                 report.applied += applied
                 changed = changed or applied > 0
-        elif magic == b"SARC" and (erows or expand or help_members or opts.talk_buffer or opts.talk_style
+        elif magic == b"SARC" and (erows or expand or opts.runtime_fit or help_members or opts.talk_buffer or opts.talk_style
                                        or opts.talk_lines > 3 or opts.talk_wide_2d
                                        or (opts.map_labels and path.startswith("/ui/map/"))):
             sarc = Sarc.parse(e.data)

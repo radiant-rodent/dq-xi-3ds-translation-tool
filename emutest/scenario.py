@@ -223,6 +223,7 @@ def make_save(mode: str, gold: int | None = None, rename: str = ""):
     if gold is not None:
         for at in GOLD_AT:
             struct.pack_into("<I", d, at, gold)
+        d[0x6A7F:0x6A84] = b"\0" * 5    # clear Draconian Quest flags (0x6A80 = No Shopping in user_citra)
     if rename:
         print("renamed", rename_members(d, rename), "stored names")
     if gold is not None or rename:

@@ -414,8 +414,10 @@ def assemble(base: int) -> bytes:
 #   right after the real pass (0x3A7AB4, r4 = pane: `ldrb r0, [r4, #0x44]` -> `bl estub`).
 # - Its measuring pass sizes the pane buffer (vt+0x58 -> 0x53F258, reallocates only when
 #   length + 1 > capacity): 0x3A7A90 `uxth r1, r0` -> `bl sstub` adds 2 units per article /
-#   plural marker in the template (r6 = template, r8 = its length), so "the " fits, plus 16
-#   units for party names that namefix expands after the text is built.
+#   plural marker in the template (r6 = template, r8 = its length), so "the " fits, plus 8
+#   units per {v:N} tag (0x0004) or literal party name code (0xE010..0xE01F) that namefix
+#   expands after the text is built (not unconditionally on every pane: +16 chars * 312 B =
+#   5 KB per pane exhausted the UI layout heap when buying items in the Cobblestone shop).
 # - Both pane SetString functions (0x53F940: NUL-terminated text, 0x53F9EC: text with a length)
 #   end with the text and its NUL in the pane's buffer ([pane + 0xA4], capacity [+0xCC] units,
 #   length [+0xCE]; r4 = pane): `ldrb r0, [r4, #0xd0]` -> `bl stub`, which resolves texts set
@@ -453,16 +455,23 @@ estub:
 
 sstub:
     push {r2, r3, lr}
-    mov r1, #8                  @ 2 x 8 units for long party names inserted (namefix codes)
+    mov r1, #0
     mov r2, #0
 ss_loop:
     cmp r2, r8
     bhs ss_done
     add r3, r6, r2, lsl #1
     ldrh r3, [r3]
+    cmp r3, #4                  @ {v:N} variable tag (0x0004, var_id): +8 units if it holds a name code
+    addeq r1, r1, #4
+    addeq r2, r2, #2
+    beq ss_loop
     sub r3, r3, #0xE000
-    cmp r3, #4                  @ {the} {The} {a} {A} {pl}
+    cmp r3, #4                  @ {the} {The} {a} {A} {pl}: +2 units
     addls r1, r1, #1
+    sub r3, r3, #0x10
+    cmp r3, #15                 @ 0xE010..0xE01F literal party name code: +8 units
+    addls r1, r1, #4
     add r2, r2, #1
     b ss_loop
 ss_done:

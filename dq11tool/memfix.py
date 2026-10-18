@@ -33,8 +33,14 @@ UI_SIZE = 0x23F880
 MAX_AMOUNT = 0x140000        # leaves allocator 1 ~650 KB (peak use measured ~350 KB)
 
 
+OOM_RETURN_BUG = 0x6F1D08    # addeq r0, r4, #0x54: stripped debug call left r0 = &fallback_heap on OOM
+OOM_BUG_ORIG = 0x02840054
+ARM_NOP = 0xE1A00000
+
+
 def patch(code: bytes, amount: int) -> bytes:
-    """Move `amount` bytes (multiple of 64 KB) from allocator 1's fallback heap to the UI heap."""
+    """Move `amount` bytes (multiple of 64 KB) from allocator 1's fallback heap to the UI heap,
+    and fix 0x6F1D08 so fallback OOM returns NULL instead of &this->fallback_heap."""
     if amount <= 0:
         return code
     if amount % 0x10000 or amount > MAX_AMOUNT:
@@ -45,6 +51,8 @@ def patch(code: bytes, amount: int) -> bytes:
         raise ValueError("heap setup literals not found (different game version?)")
     struct.pack_into("<I", out, DONOR_LITERAL - BASE, DONOR_SIZE - amount)
     struct.pack_into("<I", out, UI_HEAP_LITERAL - BASE, UI_SIZE + amount)
+    if struct.unpack_from("<I", out, OOM_RETURN_BUG - BASE)[0] == OOM_BUG_ORIG:
+        struct.pack_into("<I", out, OOM_RETURN_BUG - BASE, ARM_NOP)
     return bytes(out)
 
 

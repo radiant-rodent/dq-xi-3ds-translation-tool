@@ -66,15 +66,14 @@ PROBES = {
         "0c102de944209fe50030a0e3100053e30b0000aa83c192e700005ce10400000a00005ce30100000a013083e2"
         "f6ffffea830182e783c182e004309ce5030051e104108c850c10bde870402de9f6e6f8ea009d8300")),
     # oom: the small-block allocator's fallback (0x6F1CFC: alloc from the general heap at
-    # allocator+0x54). When that fails the game returns the heap object's own address (and
-    # corrupts it); the probe counts failures at OOM and keeps the caller (lr) and the size of
+    # allocator+0x54). The probe counts failures at OOM and keeps the caller (lr) and the size of
     # the last one: OOM = [count, lr, size, -, last fallback size]. It also profiles every
     # fallback allocation by its caller: PROF = 32 x [caller lr, total bytes, count].
     "oom": (0x6F1CFC, bytes.fromhex("540084e2"), bytes.fromhex("bfcb00ea"), 0x724C00, bytes.fromhex(
         "66002de990309fe514509de50060a0e3200056e30e0000aa000093e5050050e10500000a000050e30200000a"
         "0c3083e2016086e2f5ffffea005083e5040093e5010080e0040083e5080093e5010080e2080083e56600bde8"
         "38309fe5101083e5540084e22fe7f8eb000050e31080bd1820309fe5001093e5011081e2001083e504109de5"
-        "041083e5101093e5081083e5540084e21080bde8809c8300809d8300")),
+        "041083e5101093e5081083e50000a0e31080bde8809c8300809d8300")),
     # heap_live (use with heap_track): live bytes and high-water mark per tracked heap, kept on
     # the general heap's success exit (0x55EA44) and free entry (0x55E808):
     # LIVE = 16 x [live bytes, peak bytes] (same index as HEAPS); block headers included.

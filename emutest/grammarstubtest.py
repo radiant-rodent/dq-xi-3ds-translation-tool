@@ -73,16 +73,17 @@ def main():
     sim.call(labels["estub"], sp=SP)
     check(f"estub resolves ({text(sim)!r})", text(sim) == want and length(sim) == len(want)
           and sim.r[0] == 5 and sim.r[13] == SP and sim.r[1:4] == [0x301, 0x302, 0x303])
-    # sstub: slack per marker
-    for tpl, n in (("{The}{v:2} attacks {the}{v:3}{pl}!", 3), ("Hero attacks!", 0), ("{a}{v:5}", 1)):
+    # sstub: slack per marker (+2 units) and per {v:N} / party name code (+8 units)
+    for tpl, slack in (("{The}{v:2} attacks {the}{v:3}{pl}!", 22), ("Hero attacks!", 0),
+                       ("{a}{v:5}", 10), ("\ue010", 8)):
         raw = encode_str(tpl).encode("utf-16-le") + b"\0\0"
         o = TPL - sim.mem_base
         sim.mem[o:o + len(raw)] = raw
         sim.r = [0x300 + k for k in range(16)]
         sim.r[0], sim.r[6], sim.r[8] = 40, TPL, len(raw) // 2 - 1
         sim.call(labels["sstub"], sp=SP)
-        check(f"sstub {tpl!r}: {sim.r[1]} (want {40 + 2 * n})",
-              sim.r[1] == 40 + 2 * n and sim.r[2:4] == [0x302, 0x303] and sim.r[13] == SP)
+        check(f"sstub {tpl!r}: {sim.r[1]} (want {40 + slack})",
+              sim.r[1] == 40 + slack and sim.r[2:4] == [0x302, 0x303] and sim.r[13] == SP)
     print("all ok" if not bad else f"{bad} FAILED")
     return bad
 
