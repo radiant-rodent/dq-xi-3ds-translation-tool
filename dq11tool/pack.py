@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 
 from . import blz
 
+MAX_ALIGN = 0x80
+
 
 @dataclass
 class PackEntry:
@@ -28,6 +30,7 @@ class PackEntry:
     flags: int
     header_size: int
     raw_header: bytes  # original entry header (incl. name field), size header_size
+    align: int = 4     # payload alignment in the original file (capped at MAX_ALIGN)
 
 
 @dataclass
@@ -60,7 +63,8 @@ class Pack:
             eh, fl, sz = struct.unpack_from("<HHI", data, o)
             raw_header = data[o:o + eh]
             name = raw_header[8:].split(b"\0", 1)[0].decode("ascii", "replace")
-            p.entries.append(PackEntry(name, data[o + eh:o + eh + sz], fl, eh, raw_header))
+            p.entries.append(PackEntry(name, data[o + eh:o + eh + sz], fl, eh, raw_header,
+                                       max(4, min((o + eh) & -(o + eh), MAX_ALIGN))))
             end = max(end, o + eh + sz)
         p.tail = data[_align4(end):total] if _align4(end) < total else b""
         return p
@@ -76,7 +80,10 @@ class Pack:
         out += self.hashes
         offs = []
         for e in self.entries:
-            while len(out) % 4:
+            # Textures (BCH, SARC layouts) are used in place and need their original 0x80
+            # alignment; payloads packed at 4 bytes after a grown text entry made the game
+            # get null textures (crash entering the first battle).
+            while len(out) % 4 or (len(out) + e.header_size) % e.align:
                 out += b"\0"
             offs.append(len(out))
             hdr = bytearray(e.raw_header)

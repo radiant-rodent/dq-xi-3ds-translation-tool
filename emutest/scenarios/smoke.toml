@@ -1,0 +1,52 @@
+# python emutest/scenario.py suite emutest/scenarios/smoke.toml
+# One run per event kind and display mode. Results: _emutest/runs/scenario/summary.html
+# Keys = scenario.py options (kind, label, mode, party, members, enemies, zone, id, gold,
+# steps, inputs).
+
+[[run]]
+kind = "battle"
+label = "battle_slimes_3d"
+mode = "3d"
+party = "strong"
+enemies = "Slime x3, Dracky"
+zone = "0x562"          # Cobblestone Tor (first story battle)
+
+[[run]]
+kind = "battle"
+label = "battle_slimes_2d"
+mode = "2d"
+party = "strong"
+enemies = "Slime x3, Dracky"
+zone = "0x562"
+
+[[run]]
+kind = "battle"
+label = "battle_longnames_2way"
+mode = "2way"
+party = "godlike"
+enemies = "Malicious drackyma, Vicious drackmage x2"
+zone = "0x535"          # Heliodor arena
+
+[[run]]
+kind = "shop"
+label = "shop_weapons_3d"
+mode = "3d"
+id = 1
+
+[[run]]
+kind = "shop"
+label = "shop_weapons_2d"
+mode = "2d"
+id = 1
+
+[[run]]
+kind = "church"
+label = "church_3d"
+mode = "3d"
+party = "asis"
+
+[[run]]
+kind = "inn"
+label = "inn_2d"
+mode = "2d"
+party = "asis"

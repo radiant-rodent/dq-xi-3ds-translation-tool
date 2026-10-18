@@ -22,13 +22,18 @@ Only fonts using a 4-bit sheet format (A4/L4, as all DQXI fonts do) can be patch
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import struct
 from dataclasses import dataclass, field
 
-VERSION = 1                     # bump when the output of import_glyphs changes (cache key)
-TARGET_FONTS = ("3D14", "2D14")  # message window fonts (3D mode / 2D mode)
+VERSION = 12                    # bump when the output of import_glyphs changes (cache key)
+# fonts of the top screen (message windows, menus); the bottom screen's 2D fonts keep their
+# own pixel-style letters (fontcompose adds the accents there). NOT 2D14SH (3D battle captions
+# and every field map place label): the DQ VII letters there, with or without a copied outline
+# ring, looked much worse than the original (user, 2026-10-17) - keep its own glyphs
+TARGET_FONTS = ("3D14", "3D12")
+# the ring made the thin serif letters hard to read over the 3D scene (user, 2026-10-17): none
+OUTLINE: dict[str, int] = {}
 DONOR_NAME = "m7_win_p14"        # Dragon Quest VII (EU) message window font, 14 px
 
 
@@ -223,10 +228,40 @@ class ImportResult:
     shift: int = 0
 
 
+def _outlined(rows: list[bytes], o: int) -> list[bytes]:
+    """rows padded by o pixels on every side, with an outline ring around the ink like the
+    one baked into 2D14SH: 8 next to the ink, fading outwards (5, 2)."""
+    h, w = len(rows), len(rows[0]) if rows else 0
+    W, H = w + 2 * o, h + 2 * o
+    core = [[0] * W for _ in range(H)]
+    for y, r in enumerate(rows):
+        for x, v in enumerate(r):
+            core[y + o][x + o] = v
+    ink = [(x, y) for y in range(H) for x in range(W) if core[y][x] >= 6]
+    ring = [[0] * W for _ in range(H)]
+    for x, y in ink:
+        for dy in range(-o, o + 1):
+            for dx in range(-o, o + 1):
+                xx, yy = x + dx, y + dy
+                if 0 <= xx < W and 0 <= yy < H:
+                    d2 = dx * dx + dy * dy
+                    v = 8 if d2 <= 2 else 5 if d2 <= 4 else 2
+                    if v > ring[yy][xx]:
+                        ring[yy][xx] = v
+    return [bytes(max(core[y][x], ring[y][x]) for x in range(W)) for y in range(H)]
+
+
 def import_glyphs(target: bytes, donor: bytes, fullwidth: bool = True,
-                  zero_kerning: bool = True) -> ImportResult:
+                  zero_kerning: bool = True, spacing: int = 1, outline: int = 0) -> ImportResult:
+    """spacing: pixels added to every inked glyph's advance. DQ VII's glyphs have no side
+    bearings at all (its layouts add character spacing), so without it punctuation runs into
+    the neighbouring letters ("j'" reads as one glyph). outline: a ring of this many pixels
+    around every donor glyph (fonts with a baked outline, OUTLINE); the advance stays."""
     t = Font(target)
     d = Font(donor)
+    if outline:
+        d.glyph = (lambda g, _orig=d.glyph: _outlined(_orig(g), outline))
+        d.width = (lambda g, _orig=d.width: (lambda l, gw, cw: (l - outline, gw + 2 * outline, cw))(*_orig(g)))
     if t.magic != b"FFNT":
         raise ValueError("only BFFNT (FFNT) target fonts are supported")
     if t.fmt not in (10, 11):
@@ -256,28 +291,31 @@ def import_glyphs(target: bytes, donor: bytes, fullwidth: bool = True,
     new_codes = sorted(c for c in wanted if c not in t.cmap)
     total = t.glyph_count + len(new_codes)
 
-    def layout(shift: int):
-        ch = max(t.ch, bottom + shift)
+    def layout(shift: int, lift: int):
+        ch = max(t.ch + lift, bottom + shift + lift)
         for cw in range(max(t.cw, need_w), t.cw - 1, -1):
             cols, rows = t.sw // (cw + 1), t.sh // (ch + 1)
             if cols * rows * t.nsheets >= total:
                 return cw, ch, cols, rows
         return None
 
+    # glyphs that would stick out above the cell either lift the whole sheet (existing glyphs
+    # and the baseline move down) or are placed lower / clipped when the sheet has no room
     choice = None
-    for allow_clip in (False, True):
+    for mode in ("lift", "fit", "clip"):
         for shift in (ideal, ideal - 1, ideal + 1, ideal - 2, ideal + 2):
-            if not allow_clip and top + shift < 0:
+            lift = max(0, -(top + shift)) if mode == "lift" else 0
+            if mode == "fit" and top + shift < 0:
                 continue
-            lay = layout(shift)
+            lay = layout(shift, lift)
             if lay:
-                choice = (shift, lay)
+                choice = (shift, lift, lay)
                 break
         if choice:
             break
     if not choice:
         raise ValueError("not enough room on the glyph sheet for the imported glyphs")
-    shift, (cw, ch, cols, rows) = choice
+    shift, lift, (cw, ch, cols, rows) = choice
 
     res = ImportResult(b"", cell=(cw, ch), shift=shift)
     # glyphs too wide for the chosen cell are left out (target keeps its own glyph)
@@ -286,16 +324,42 @@ def import_glyphs(target: bytes, donor: bytes, fullwidth: bool = True,
         if wanted[c] not in fits:
             res.skipped.append(chr(c))
             del wanted[c]
-    new_codes = [c for c in new_codes if c in wanted]
 
-    # glyph index -> pixel source
-    gi_new = {c: t.glyph_count + i for i, c in enumerate(new_codes)}
-    from_donor: dict[int, int] = {}                  # target glyph index -> donor glyph index
+    pad = d.width(d.cmap[0x20])[2] if 0x20 in d.cmap else 4
+    glyphs = {}
     for c, g in wanted.items():
-        from_donor[gi_new.get(c, t.cmap.get(c))] = g
+        px = donor_px[g]
+        cell = [px[r - shift - lift][:cw] if 0 <= r - shift - lift < len(px) else b"" for r in range(ch)]
+        left, gw, cwid = d.width(g)
+        if boxes.get(g):
+            cwid += spacing
+        if 0xFF21 <= c <= 0xFF3A or 0xFF41 <= c <= 0xFF5A:
+            # full-width letters are what the game appends to monster names ("スライムＡ"):
+            # a space in front keeps "Slime A" apart, as the wide Japanese glyph did
+            left += pad
+            cwid += pad
+        glyphs[c] = (cell, (left, min(gw, cw), cwid))
+    res.data, res.replaced, res.added = _rewrite(target, t, glyphs, (cw, ch, cols, rows), lift, zero_kerning)
+    return res
+
+
+def _rewrite(target: bytes, t: Font, glyphs: dict, cell: tuple, lift: int,
+             zero_kerning: bool = True) -> tuple[bytes, int, int]:
+    """Font `target` with new/replaced glyphs.
+
+    glyphs: code -> (rows, (left, glyph width, advance)); rows are pixel rows (0..15) in the
+            new cell, row 0 = top of the new cell.
+    cell:   new (cell w, cell h, columns, rows) of the glyph sheet.
+    lift:   existing glyphs move down by this many rows (and the baseline with them), which
+            makes room above them, e.g. for accents on capitals.
+    Returns (data, replaced, added)."""
+    cw, ch, cols, rows = cell
+    new_codes = sorted(c for c in glyphs if c not in t.cmap)
+    gi_new = {c: t.glyph_count + i for i, c in enumerate(new_codes)}
+    by_gi = {gi_new.get(c, t.cmap.get(c)): v for c, v in glyphs.items()}
     count = t.glyph_count + len(new_codes)
-    res.replaced = len(wanted) - len(new_codes)
-    res.added = len(new_codes)
+    if count > cols * rows * t.nsheets:
+        raise ValueError("not enough room on the glyph sheet")
 
     # ---- new sheets
     old = t.sheets
@@ -303,25 +367,20 @@ def import_glyphs(target: bytes, donor: bytes, fullwidth: bool = True,
     for gi in range(count):
         s, x, y = t.cell_origin(gi, cw, ch, cols, rows)
         dst = sheets[s]
-        if gi in from_donor:
-            px = donor_px[from_donor[gi]]
-            for r in range(ch):
-                sr = r - shift
-                if 0 <= sr < len(px):
-                    row = px[sr][:cw]
-                    dst[(y + r) * t.sw + x:(y + r) * t.sw + x + len(row)] = row
+        if gi in by_gi:
+            for r, row in enumerate(by_gi[gi][0][:ch]):
+                row = row[:cw]
+                dst[(y + r) * t.sw + x:(y + r) * t.sw + x + len(row)] = row
         elif gi < t.glyph_count:
             os_, ox, oy = t.cell_origin(gi)
             src = old[os_]
-            for r in range(t.ch):
-                dst[(y + r) * t.sw + x:(y + r) * t.sw + x + t.cw] = \
-                    src[(oy + r) * t.sw + ox:(oy + r) * t.sw + ox + t.cw]
+            for r in range(min(t.ch, ch - lift)):
+                dst[(y + lift + r) * t.sw + x:(y + lift + r) * t.sw + x + t.cw] =                     src[(oy + r) * t.sw + ox:(oy + r) * t.sw + ox + t.cw]
 
     # ---- widths
     widths = {gi: t.width(gi) for gi in range(t.glyph_count)}
-    for gi, g in from_donor.items():
-        left, gw, cwid = d.width(g)
-        widths[gi] = (left, min(gw, cw), cwid)
+    for gi, (_, w) in by_gi.items():
+        widths[gi] = w
     max_char = max(w[2] for w in widths.values())
 
     # ---- character map: replaced codes keep their index; new codes go into the scan block
@@ -346,11 +405,16 @@ def import_glyphs(target: bytes, donor: bytes, fullwidth: bool = True,
     struct.pack_into("<BB", out, t.tglp + 8, cw, ch)
     out[t.tglp + 11] = max(t.maxw, min(255, max_char))
     struct.pack_into("<HH", out, t.tglp + 20, cols, rows)
+    if lift:
+        struct.pack_into("<H", out, t.tglp + 16, t.baseline + lift)       # FFNT: baseline in TGLP
     for i, sh in enumerate(sheets):
         enc = _encode_sheet(sh, t.sw, t.sh)
         assert len(enc) == t.sheet_size
         out[t.sheet_off + i * t.sheet_size:t.sheet_off + (i + 1) * t.sheet_size] = enc
-    out[t.finf + 10] = max(t.font_width, min(255, max_char))     # FINF max width
+    # FINF width stays the original one: text boxes draw glyphs at fontSize.x / FINF width,
+    # and the layouts' font sizes equal the original widths. A larger value (the widest
+    # imported glyph) squeezed all text horizontally (3D12 to 13/19), so the game no longer
+    # matched the editor's measurements.
 
     def align4():
         while len(out) % 4:
@@ -385,7 +449,7 @@ def import_glyphs(target: bytes, donor: bytes, fullwidth: bool = True,
 
     # other blocks (kerning ...) are copied
     nblocks = 2 + 1 + len(blocks)
-    replaced_codes = {c for c in wanted if c in t.cmap}
+    replaced_codes = {c for c in glyphs if c in t.cmap}
     for mg, p, sz in t.blocks:
         if mg in (b"FINF", b"TGLP", b"CWDH", b"CMAP"):
             continue
@@ -400,8 +464,7 @@ def import_glyphs(target: bytes, donor: bytes, fullwidth: bool = True,
         struct.pack_into("<II", out, t.finf + 0x18, cwdh_at + 8, cmap_at[0] + 8)
     struct.pack_into("<I", out, 0x0C, len(out))
     struct.pack_into("<H", out, 0x10, nblocks)
-    res.data = bytes(out)
-    return res
+    return bytes(out), len(glyphs) - len(new_codes), len(new_codes)
 
 
 def _zero_kerning(raw: bytearray, codes: set[int]):
@@ -421,149 +484,61 @@ def _zero_kerning(raw: bytearray, codes: set[int]):
         pass   # unknown layout: leave it alone
 
 
-# ---------------------------------------------------------------------- donor management
+# ---------------------------------------------------------------------- bundled donor
 
-def donor_path(workdir: str) -> str:
-    return os.path.join(workdir, "fonts", "latin_donor.bcfnt")
-
-
-def donor_info(workdir: str) -> dict | None:
-    p = donor_path(workdir)
-    if not os.path.isfile(p):
-        return None
-    info = {}
-    try:
-        with open(p + ".json", encoding="utf-8") as fp:
-            info = json.load(fp)
-    except (OSError, ValueError):
-        pass
-    info["path"] = p
-    return info
+DONOR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", DONOR_NAME + ".bcfnt")
+_donor: bytes | None = None
 
 
-def enabled(project) -> bool:
-    """Project setting: use the imported Latin font (on by default once a donor is installed)."""
-    return bool(project.config.get("latin_font", True))
+def donor() -> bytes:
+    """The Latin font shipped with the tool (from Dragon Quest VII (EU),
+    RomFS:/LAYOUT/system_font14__.arc -> font/m7_win_p14.bcfnt)."""
+    global _donor
+    if _donor is None:
+        with open(DONOR_FILE, "rb") as fp:
+            _donor = fp.read()
+    return _donor
 
 
-def active_donor(project) -> bytes | None:
-    """The donor font if one is installed and the project uses it, else None."""
-    return load_donor(project.workdir) if enabled(project) else None
+BLANK_CODES = tuple(range(0xE000, 0xE00B))   # textcodec grammar markers, {noun}, {grp}: drawn as nothing
+# Japanese-only glyphs the game appends at runtime, drawn as nothing: U+334D is the small "こ"
+# item counter ("2㍍" in the Item Bag and smithing lists; the executable builds it, no string
+# to translate - user 2026-10-17)
+BLANKED_CODES = (0x334D,)
 
 
-def load_donor(workdir: str | None) -> bytes | None:
-    if not workdir:
-        return None
-    p = donor_path(workdir)
-    if not os.path.isfile(p):
-        return None
-    with open(p, "rb") as fp:
-        return fp.read()
-
-
-def _font_candidates(path: str):
-    """(name, data) of every font in a .3ds/.cci game image, darc/SARC archive or font file."""
-    with open(path, "rb") as fp:
-        head = fp.read(4)
-    if head in (b"CFNT", b"FFNT"):
-        with open(path, "rb") as fp:
-            yield os.path.basename(path), fp.read()
-        return
-    if head in (b"darc", b"SARC"):
-        with open(path, "rb") as fp:
-            yield from _fonts_in_archive(os.path.basename(path), fp.read())
-        return
-    from .ctr.formats import open_image
-    f, ncsd, ncch = open_image(path)
-    try:
-        # some "decrypted" dumps keep the crypto flags set although the RomFS is plaintext,
-        # so the flag alone is not trusted: try to read the RomFS either way
-        try:
-            romfs = ncch.romfs()
-            files = romfs.files if romfs else None
-        except Exception:
-            files = None
-        if not files:
-            raise ValueError("cannot read the game's RomFS"
-                             + ("" if ncch.is_decrypted else " (the image is encrypted; use a decrypted .3ds)"))
-        for x in files:
-            low = x.path.lower()
-            if low.endswith((".bcfnt", ".bffnt")) or (low.endswith((".arc", ".sarc")) and "font" in low):
-                data = romfs.read_file(x)
-                if data[:4] in (b"CFNT", b"FFNT"):
-                    yield x.path, data
-                elif data[:4] in (b"darc", b"SARC"):
-                    yield from _fonts_in_archive(x.path, data)
-    finally:
-        f.close()
-
-
-def _fonts_in_archive(name: str, data: bytes):
-    from .darc import Sarc, darc_files
-    files = darc_files(data) if data[:4] == b"darc" else list(Sarc.parse(data).files.items())
-    for n, d in files:
-        if d[:4] in (b"CFNT", b"FFNT"):
-            yield f"{name}/{n}", d
-
-
-def _latin_coverage(data: bytes) -> int:
-    try:
-        f = Font(data)
-    except Exception:
-        return 0
-    return sum(1 for c in f.cmap if 0x20 <= c < 0x180)
-
-
-def install_donor(workdir: str, path: str) -> dict:
-    """Find the narrow Latin font in a game image / archive / font file and store it in the
-    workspace. Prefers Dragon Quest VII's message font; otherwise the Latin font closest to
-    14 px with the most Latin-1 characters."""
-    best = None
-    for name, data in _font_candidates(path):
-        try:
-            f = Font(data)
-        except Exception:
-            continue
-        cov = _latin_coverage(data)
-        if cov < 90 or f.fmt not in (7, 8, 10, 11):
-            continue
-        # a western font: few glyphs, mostly Latin (Japanese fonts have thousands)
-        western = len(f.cmap) < 1000
-        score = (DONOR_NAME in name, western, -abs(f.height - 17), cov)
-        if best is None or score > best[0]:
-            best = (score, name, data, f)
-    if best is None:
-        raise ValueError("no suitable Latin font found in " + os.path.basename(path))
-    _, name, data, f = best
-    p = donor_path(workdir)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    with open(p, "wb") as fp:
-        fp.write(data)
-    info = {"source": os.path.abspath(path), "font": name, "height": f.height,
-            "characters": len(f.cmap)}
-    with open(p + ".json", "w", encoding="utf-8") as fp:
-        json.dump(info, fp, indent=2)
-    info["path"] = p
-    return info
-
-
-def remove_donor(workdir: str):
-    p = donor_path(workdir)
-    for x in (p, p + ".json"):
-        if os.path.exists(x):
-            os.remove(x)
-
-
-def apply(name: str, data: bytes, donor: bytes | None, cache_dir: str | None = None) -> bytes:
-    """Font `name` (e.g. '3D14') with the donor's Latin glyphs, if it is a message font."""
-    if not donor or name not in TARGET_FONTS or data[:4] != b"FFNT":
+def add_blank(data: bytes, codes=BLANK_CODES + BLANKED_CODES) -> bytes:
+    """Empty glyphs with zero advance for `codes` (kept on the current sheet layout); codes the
+    font already has (BLANKED_CODES) are emptied."""
+    t = Font(data)
+    todo = [c for c in codes if c not in t.cmap or c in BLANKED_CODES]
+    if not todo or t.magic != b"FFNT":
         return data
-    key = hashlib.sha1(data + donor + str(VERSION).encode()).hexdigest()[:16]
-    cp = os.path.join(cache_dir, f"latin_{name}_{key}.bffnt") if cache_dir else None
+    glyphs = {c: ([b""] * t.ch, (0, 0, 0)) for c in todo}
+    return _rewrite(data, t, glyphs, (t.cw, t.ch, t.cols, t.rows), 0, zero_kerning=False)[0]
+
+
+def build(name: str, data: bytes, font_fixes: bool = True, cache_dir: str | None = None) -> bytes:
+    """A game font as the exporter writes it: the bundled Latin glyphs (message fonts only),
+    the English width fixes, then accented letters composed from the font's own glyphs where
+    they are still missing. Cached, the composing takes a few seconds per font."""
+    from . import fontcompose
+    from .fontpatch import patch_font
+    if data[:4] != b"FFNT":
+        return data
+    key = hashlib.sha1(data + f"{VERSION}/{fontcompose.VERSION}/{font_fixes}".encode()
+                       ).hexdigest()[:16]
+    cp = os.path.join(cache_dir, f"font_{name}_{key}.bffnt") if cache_dir else None
     if cp and os.path.isfile(cp):
         with open(cp, "rb") as fp:
             return fp.read()
-    out = import_glyphs(data, donor).data
+    out = data
+    if name in TARGET_FONTS:
+        out = import_glyphs(out, donor(), outline=OUTLINE.get(name, 0)).data
+    if font_fixes:
+        out = patch_font(out)
+    out = fontcompose.compose(out)
+    out = add_blank(out)
     if cp:
         os.makedirs(cache_dir, exist_ok=True)
         with open(cp, "wb") as fp:

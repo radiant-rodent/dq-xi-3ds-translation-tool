@@ -245,6 +245,7 @@ async function select(id) {
   try { d = await api(`/api/string/${id}?${ctx}`); } catch (e) { if (state.selected === id) clearDetail(); return; }
   if (state.selected !== id) return;
   state.detail = d;
+  if (d.game_font) state.previewFont = d.game_font;    // preview in the font the game uses
   renderDetail();
 }
 
@@ -275,11 +276,15 @@ function renderDetail() {
     </div>
     ${d.origin === "pc" ? `<div class="muted small">This text is the official PC translation.</div>` : ""}
     <div class="stats" id="stats"></div>
+    <div class="box-ctl" id="box-ctl"></div>
     <ul class="problems" id="problems"></ul>
     ${renderPc(d)}
     <div class="preview-head"><h4>In-game preview</h4>
-      <select id="pfont">${["3D14", "3D12", "2D14", "2D9"].map((f) => `<option ${f === state.previewFont ? "selected" : ""}>${f}</option>`).join("")}</select></div>
+      <select id="pfont" title="Font of the preview (the game uses ${esc(d.game_font || "3D14")} here)">${["3D14", "3D12", "2D14", "2D9", "2D14SH", "credit2D"].map((f) =>
+        `<option value="${f}" ${f === state.previewFont ? "selected" : ""}>${f}${f === d.game_font ? " (in game)" : ""}</option>`).join("")}</select></div>
     <div class="preview-wrap"><canvas id="preview"></canvas></div>
+    ${d.windows_2d ? `<div class="preview-head"><h4>2D mode (top screen; lower screen condensed)</h4></div>
+    <div class="preview-wrap"><canvas id="preview2d"></canvas></div>` : ""}
     ${d.neighbors && d.neighbors.length > 1 ? `<h4>Surrounding lines (same file)</h4>
       <div class="neighbors">${d.neighbors.map((n) => `<div class="${n.current ? "cur" : ""}" data-id="${n.id}">
         <span class="jp">${renderTagged(n.text, { ruby: false })}</span><span class="en">${n.translation ? renderTagged(n.translation) : '<i class="muted">—</i>'}</span></div>`).join("")}</div>` : ""}
@@ -303,11 +308,16 @@ function renderDetail() {
   $("#prev-item").onclick = () => move(-1);
   $("#next-item").onclick = () => move(1);
   $("#pfont").onchange = (e) => { state.previewFont = e.target.value; updateLive(); };
+  renderBoxCtl();
   $$(".neighbors div").forEach((el) => el.onclick = () => select(+el.dataset.id));
   $$(".ovr").forEach((b) => b.onclick = () => editOverride(+b.dataset.eid));
   $$(".pc-use").forEach((b) => b.onclick = () => { ta.value = d.pc[+b.dataset.i].en; updateLive(); ta.focus(); });
   updateLive();
-  setTimeout(() => ta.focus(), 0);
+  // don't steal focus from the search box / filters when a list refresh auto-selects a row
+  setTimeout(() => {
+    const a = document.activeElement;
+    if (!a || !a.matches("input, select, textarea") || $("#detail").contains(a)) ta.focus();
+  }, 0);
 }
 
 function insertAtCursor(ta, text) {
@@ -348,6 +358,35 @@ async function save(next) {
   renderRows();
   loadCategories();
   if (next) move(1); else { state.detail = { ...d, ...r }; $("#status").value = r.status; updateProblems(r.problems || []); }
+}
+
+// window size set by hand: for texts that cannot be shortened. Layout panes are widened in
+// the exported game files; for table texts the automatic size is only an estimate.
+function renderBoxCtl() {
+  const d = state.detail, custom = d.box_auto_width != null;
+  const pane = d.kind === "bflyt", help = d.help_window;
+  $("#box-ctl").innerHTML = `<span title="${help ? `Menu help window: shared by all menu help texts. The exporter widens it (text and frame) to the widest size set on any of them, at most ${d.help_max}px; it keeps 3 lines.`
+      : pane ? "Layout pane: the exporter widens the pane in the game files to this width (lines are only checked)."
+      : "The automatic size is the widest Japanese line of this text table, an estimate of the real window. It only changes the checks here, not the game."}">
+    ${help ? "Help window" : "Window"} <input id="bw" type="number" min="8" max="${help ? d.help_max : 1000}" value="${d.box_width}"> px ×
+    <input id="bl" type="number" min="1" max="${help ? 3 : 30}" value="${d.box_lines}"> lines</span>
+    <button id="box-set">Set</button><button id="box-fit" title="Make the window as large as the current translation">Fit to text</button>
+    ${custom ? `<button id="box-auto">Automatic (${d.box_auto_width}px × ${d.box_auto_lines})</button><span class="custom">${help ? "shared help window widened" : "custom size"}</span>` : ""}
+    ${!pane && !help ? `<span class="muted">checks only</span>` : ""}`;
+  const setBox = async (width, lines) => {
+    const r = await api(`/api/string/${d.id}/box`, { json: { width, lines } });
+    if (state.detail !== d) return;
+    Object.assign(d, r);
+    const i = state.items.findIndex((x) => x.id === d.id);
+    if (i >= 0) { state.items[i] = { ...state.items[i], ...r }; renderRows(); }
+    renderBoxCtl(); updateLive(); updateProblems(r.problems || []);
+  };
+  $("#box-set").onclick = () => setBox(+$("#bw").value || null, +$("#bl").value || null);
+  $("#box-fit").onclick = async () => {
+    const font = await loadFont(d.game_font || state.previewFont), lines = layout($("#tr").value, font);
+    setBox(Math.max(d.box_width, ...lines.map((l) => lineWidth(font, l))), Math.max(d.box_lines, lines.length));
+  };
+  if (custom) $("#box-auto").onclick = () => setBox(null, null);
 }
 
 async function autoWrap() {
@@ -425,13 +464,14 @@ function glyphWidth(font, u) {
 const lineWidth = (font, line) => line.reduce((a, u) => a + glyphWidth(font, u), 0);
 
 let previewSeq = 0;
-async function drawPreview(text, srcText, box) {
-  const seq = ++previewSeq;
-  const font = await loadFont(state.previewFont);
-  const canvas = $("#preview");
+async function drawPreview(text, srcText, box, canvasId = "#preview", fontName = null) {
+  const seq = canvasId === "#preview" ? ++previewSeq : previewSeq;
+  const font = await loadFont(fontName || state.previewFont);
+  const canvas = $(canvasId);
   if (!canvas || seq !== previewSeq) return;
   const srcLines = layout(srcText, font);
-  const boxW = Math.max(box && box.width || 0, ...srcLines.map((l) => lineWidth(font, l)), 60);
+  // a fixed window (2D mode) is not sized like the Japanese text
+  const boxW = box && box.fixed ? box.width : Math.max(box && box.width || 0, ...srcLines.map((l) => lineWidth(font, l)), 60);
   const boxLines = Math.max(box && box.lines || 0, srcLines.length, 1);
   const lines = layout(text, font);
   const lh = font.line_feed + 2, pad = 8, scale = 2;
@@ -495,6 +535,13 @@ async function updateLive() {
     <span>lines <b class="${text && lines.length > boxL ? "over" : ""}">${text ? lines.length : 0}</b> / ${boxL}</span>
     <span title="rough budget the auto-translation aims for">${chars} / ~${d.max_chars || "?"} chars</span>${capInfo}`;
   drawPreview(text, d.text, { width: boxW, lines: boxL });
+  const probs2d = [];
+  for (const w of d.windows_2d || []) {
+    drawPreview(text, d.text, { width: w.width, lines: boxL, fixed: true }, "#preview2d", w.font);
+    const f2 = await loadFont(w.font);
+    const w2 = text ? Math.max(...layout(text, f2).map((l) => lineWidth(f2, l))) : 0;
+    if (w2 > w.width) probs2d.push(`too wide for the 2D-mode message window (${w2}px > ${w.width}px)`);
+  }
   // client-side checks (the server validates on save too)
   const need = d.text.match(/\{v:[0-9A-Fa-f]+\}/g) || [];
   const have = text.match(/\{v:[0-9A-Fa-f]+\}/g) || [];
@@ -506,6 +553,7 @@ async function updateLive() {
     if (missingGlyphs.length) probs.push("characters not in the game font: " + missingGlyphs.join(" "));
     if (tw > boxW) probs.push(`too wide for its window (${tw}px > ${boxW}px)`);
     if (lines.length > boxL) probs.push(`more lines than its window has (${lines.length} > ${boxL})`);
+    probs.push(...probs2d);
   }
   updateProblems(probs);
 }
@@ -745,31 +793,7 @@ $("#import-btn").onclick = async () => {
 async function loadBuild() {
   const d = await api("/api/build/defaults");
   $("#out-dir").value = d.output_dir;
-  showDonor(await api("/api/font/donor"));
 }
-function showDonor(d) {
-  const cb = $("#latin-font");
-  cb.disabled = !d.donor;
-  cb.checked = !!d.donor && d.enabled;
-  $("#donor-msg").className = "msg";
-  $("#donor-msg").textContent = d.donor
-    ? `Using ${d.donor.font ? d.donor.font.split("/").pop() : "imported font"}` +
-      (d.donor.height ? ` (${d.donor.height} px, ${d.donor.characters} characters)` : "")
-    : "No Latin font imported: choose Dragon Quest VII (Europe) or another European 3DS game.";
-  state.fonts = {};            // previews and widths now use the other font
-}
-$("#donor-browse").onclick = async () => {
-  const r = await api("/api/browse", { json: { kind: "donor" } });
-  if (!r.path) return;
-  $("#donor-msg").className = "msg";
-  $("#donor-msg").textContent = "Searching for a Latin font…";
-  try { showDonor(await api("/api/font/donor", { json: { path: r.path, enabled: true } })); }
-  catch (e) { $("#donor-msg").className = "msg err"; $("#donor-msg").textContent = e.message; }
-};
-$("#latin-font").onchange = async (ev) => {
-  try { showDonor(await api("/api/font/donor", { json: { enabled: ev.target.checked } })); }
-  catch (e) { $("#donor-msg").className = "msg err"; $("#donor-msg").textContent = e.message; }
-};
 $("#out-browse").onclick = async () => { const r = await api("/api/browse", { json: { kind: "dir" } }); if (r.path) $("#out-dir").value = r.path; };
 $("#build-btn").onclick = async () => {
   const opts = {};

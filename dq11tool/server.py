@@ -11,7 +11,7 @@ import traceback
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
-from . import boxfit, fontimport, pcref
+from . import gamefont, pcref
 from .categories import CATEGORY_ORDER
 from .export import ExportOptions, run_export, validate
 from .metrics import FontSet, font_meta, measure, sheet_png, wrap
@@ -71,13 +71,17 @@ def create_app(workdir: str) -> Flask:
     def main_font():
         return fonts().fonts["3D14"]
 
+    def game_fonts() -> gamefont.GameFonts:
+        return gamefont.for_project(project)
+
     problem_cache = {"key": None, "ids": set()}
     problem_lock = threading.Lock()
 
-    def has_problem(sid: int, text: str, tr: str, font, box) -> bool:
+    def has_problem(sid: int, text: str, tr: str, gf, official: bool = False) -> bool:
         """Same checks as the editor warnings: window fit, placeholders / PC markup, font glyphs."""
-        if not box.fits(sid, text, tr) or validate(text, tr):
+        if not gf.fits(sid, text, tr) or validate(text, tr, official):
             return True
+        font = gf.font(sid)
         return any(ord(c) >= 0x20 and ord(c) not in font.cmap for c in tr if c not in "\n")
 
     def problem_ids() -> set[int]:
@@ -87,11 +91,10 @@ def create_app(workdir: str) -> Flask:
                                " WHERE translation IS NOT NULL AND translation != ''").fetchone()) + (fonts().key,)
         with problem_lock:
             if problem_cache["key"] != key:
-                font = main_font()
-                box = boxfit.index(project, font)
-                rows = db.execute("SELECT id, text, translation FROM source"
+                gf = game_fonts()
+                rows = db.execute("SELECT id, text, translation, origin FROM source"
                                   " WHERE translation IS NOT NULL AND translation != ''").fetchall()
-                problem_cache["ids"] = {r[0] for r in rows if has_problem(r[0], r[1], r[2], font, box)}
+                problem_cache["ids"] = {r[0] for r in rows if has_problem(r[0], r[1], r[2], gf, r[3] == "pc")}
                 problem_cache["key"] = key
             return set(problem_cache["ids"])
 
@@ -127,11 +130,6 @@ def create_app(workdir: str) -> Flask:
             root.attributes("-topmost", True)
             if kind == "dir":
                 result["path"] = filedialog.askdirectory(parent=root, title="Choose a folder")
-            elif kind == "donor":
-                result["path"] = filedialog.askopenfilename(
-                    parent=root, title="Choose a European 3DS game (e.g. Dragon Quest VII) or a font file",
-                    filetypes=[("3DS game image / font", "*.3ds *.cci *.bcfnt *.bffnt *.arc"),
-                               ("All files", "*.*")])
             elif kind == "pak":
                 result["path"] = filedialog.askopenfilename(
                     parent=root, title="Choose the Japanese text .pak",
@@ -311,38 +309,50 @@ def create_app(workdir: str) -> Flask:
         for r in rows:
             r = dict(r)
             r["occurrences"] = db.execute("SELECT COUNT(*) FROM entry WHERE source_id=?", (r["id"],)).fetchone()[0]
-            e = db.execute("SELECT kind, file, entry, category, context, capacity FROM entry WHERE id=?",
+            e = db.execute("SELECT kind, file, entry, category, context, capacity, loc FROM entry WHERE id=?",
                            (r["first_entry"],)).fetchone()
             items.append(_item(r, e, font))
         return jsonify({"total": total, "page": page, "per": per, "items": items})
 
-    def _item(r, e, font):
+    def _item(r, e, _font=None):
+        gf = game_fonts()
+        font = gf.font(r["id"])                 # measured in the font the game draws it with
         src_m = measure(r["text"], font)
         d = {k: r[k] for k in ("id", "text", "translation", "status", "note", "chars", "occurrences", "origin")
              if k in r.keys()}
         m = project.db().execute("SELECT kind, score FROM pc_match WHERE source_id=? AND rank=0", (r["id"],)).fetchone()
         if m:
             d.update(pc_kind=m["kind"], pc_score=round(m["score"], 2))
-        box = boxfit.index(project, font).get(r["id"], r["text"])
+        box = gf.get(r["id"], r["text"])
+        # executable strings the exporter can move to free space have no length limit
+        cap = 0 if e["capacity"] and e["loc"] in project.code_movable() else e["capacity"]
         d.update(category=e["category"], context=e["context"], kind=e["kind"], file=e["file"],
-                 capacity=e["capacity"], src_width=src_m["max_width"], src_lines=src_m["lines_per_page"],
-                 box_width=box["width"], box_lines=box["lines"], max_chars=box["max_chars"])
+                 capacity=cap, src_width=src_m["max_width"], src_lines=src_m["lines_per_page"],
+                 box_width=box["width"], box_lines=box["lines"], max_chars=box["max_chars"],
+                 box_auto_width=box["auto_width"], box_auto_lines=box["auto_lines"],
+                 help_window=box["help_window"], help_max=box["help_max"])
+        if gf.source_font(r["id"]) == gamefont.MESSAGE_FONT and not gf.name_field(r["id"]):
+            # the 2D-mode message windows (top screen 1:1, lower screen condensed): same line width
+            d["windows_2d"] = [{"font": f, "width": w} for f, w in gamefont.MESSAGE_2D]
         if r["translation"]:
             tm = measure(r["translation"], font)
-            problems = validate(r["text"], r["translation"])
+            problems = validate(r["text"], r["translation"], r["origin"] == "pc" if "origin" in r.keys() else False)
             missing = sorted({c for c in r["translation"] if ord(c) >= 0x20 and ord(c) not in font.cmap})
             if missing:
                 problems.append("characters not in the game font: " + " ".join(missing))
-            if e["capacity"]:
+            if cap:
                 need = (len(encode_str(r["translation"])) + 1) * 2
-                if need > e["capacity"]:
-                    problems.append(f"too long for this executable slot: max {e['capacity'] // 2 - 1} characters")
+                if need > cap:
+                    problems.append(f"too long for this executable slot: max {cap // 2 - 1} characters")
             too_wide = tm["max_width"] > box["width"]
             too_many = tm["lines"] > box["lines"]
             if too_wide:
                 problems.append(f"too wide for its window ({tm['max_width']}px > {box['width']}px)")
             if too_many:
                 problems.append(f"more lines than its window has ({tm['lines']} > {box['lines']})")
+            if not (too_wide or too_many) and not gf.fits(r["id"], r["text"], r["translation"]):
+                too_wide = True
+                problems.append("too wide for the 2D-mode message window")
             d.update(tr_width=tm["max_width"], tr_lines=tm["lines_per_page"], too_wide=too_wide or too_many,
                      problems=problems)
         return d
@@ -371,9 +381,10 @@ def create_app(workdir: str) -> Flask:
             for n in neighbors:
                 n["current"] = n["entry_id"] == first["id"]
         font = main_font()
-        d = _item(r, db.execute("SELECT kind, file, entry, category, context, capacity FROM entry WHERE id=?",
+        d = _item(r, db.execute("SELECT kind, file, entry, category, context, capacity, loc FROM entry WHERE id=?",
                                 (first["id"],)).fetchone(), font) if first else dict(r)
-        d.update(occurrences_list=occ, neighbors=neighbors, pc=pcref.suggestions(project, sid))
+        d.update(occurrences_list=occ, neighbors=neighbors, pc=pcref.suggestions(project, sid),
+                 game_font=game_fonts().entry_font(first) if first else gamefont.MESSAGE_FONT)
         return jsonify(d)
 
     @app.post("/api/string/<int:sid>")
@@ -405,7 +416,25 @@ def create_app(workdir: str) -> Flask:
         db.commit()
         r = db.execute("SELECT s.*, (SELECT COUNT(*) FROM entry WHERE source_id=s.id) AS occurrences"
                        " FROM source s WHERE id=?", (sid,)).fetchone()
-        e = db.execute("SELECT kind, file, entry, category, context, capacity FROM entry WHERE source_id=?"
+        e = db.execute("SELECT kind, file, entry, category, context, capacity, loc FROM entry WHERE source_id=?"
+                       " ORDER BY id LIMIT 1", (sid,)).fetchone()
+        return jsonify(_item(r, e, main_font()))
+
+    @app.post("/api/string/<int:sid>/box")
+    def save_box(sid):
+        """Window size set by hand ({width, lines}; null = automatic). For layout panes the
+        exporter widens the pane to this width."""
+        body = request.json or {}
+        def num(k, lo, hi):
+            v = body.get(k)
+            return None if v in (None, "", 0) else max(lo, min(hi, int(v)))
+        db = project.db()
+        db.execute("UPDATE source SET box_width=?, box_lines=?, updated=? WHERE id=?",
+                   (num("width", 8, 1000), num("lines", 1, 30), time.time(), sid))
+        db.commit()
+        r = db.execute("SELECT s.*, (SELECT COUNT(*) FROM entry WHERE source_id=s.id) AS occurrences"
+                       " FROM source s WHERE id=?", (sid,)).fetchone()
+        e = db.execute("SELECT kind, file, entry, category, context, capacity, loc FROM entry WHERE source_id=?"
                        " ORDER BY id LIMIT 1", (sid,)).fetchone()
         return jsonify(_item(r, e, main_font()))
 
@@ -420,10 +449,11 @@ def create_app(workdir: str) -> Flask:
     @app.post("/api/wrap")
     def do_wrap():
         body = request.json or {}
+        if body.get("id") and not body.get("width"):   # the window and font the string is shown in
+            return jsonify({"text": game_fonts().wrap(int(body["id"]), body.get("source", ""),
+                                                      body.get("text", ""))})
         font = fonts().fonts.get(body.get("font") or "3D14", main_font())
         width = body.get("width")
-        if not width and body.get("id"):   # wrap to the window the string is shown in
-            width = boxfit.index(project, main_font()).get(int(body["id"]), body.get("source", ""))["width"]
         return jsonify({"text": wrap(body.get("text", ""), body.get("source", ""), font,
                                      width=width, lines_per_page=body.get("lines"))})
 
@@ -453,35 +483,6 @@ def create_app(workdir: str) -> Flask:
             with open(path, "wb") as fp:
                 fp.write(sheet_png(fs.raw[name], idx))
         return send_from_directory(cache, os.path.basename(path), max_age=3600)
-
-    # ------------------------------------------------------------------ imported Latin font
-    def donor_state():
-        return {"donor": fontimport.donor_info(project.workdir), "enabled": fontimport.enabled(project)}
-
-    @app.get("/api/font/donor")
-    def donor_get():
-        return jsonify(donor_state())
-
-    @app.post("/api/font/donor")
-    def donor_set():
-        body = request.json or {}
-        if body.get("path"):
-            if project.rom_path and os.path.normcase(os.path.abspath(body["path"])) == \
-                    os.path.normcase(os.path.abspath(project.rom_path)):
-                return jsonify({"error": "choose another game: Dragon Quest XI's own fonts are the ones being replaced"}), 400
-            try:
-                fontimport.install_donor(project.workdir, body["path"])
-            except (OSError, ValueError) as e:
-                return jsonify({"error": str(e)}), 400
-        if "enabled" in body:
-            project.config["latin_font"] = bool(body["enabled"])
-            project.save_config()
-        return jsonify(donor_state())
-
-    @app.delete("/api/font/donor")
-    def donor_delete():
-        fontimport.remove_donor(project.workdir)
-        return jsonify(donor_state())
 
     # ------------------------------------------------------------------ glossary
     @app.get("/api/glossary")

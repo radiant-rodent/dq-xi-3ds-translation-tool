@@ -65,22 +65,39 @@ def _role(tag: str) -> str:
     return re.sub(r"\d+$", "", t).lower()
 
 
-def convert_en(pc_en: str, source_jp: str) -> str:
+_ARTICLE = {("def", False): "{the}", ("def", True): "{The}", ("indef", False): "{a}", ("indef", True): "{A}"}
+
+
+def convert_en(pc_en: str, source_jp: str, grammar: bool = False) -> str:
     """Official English (PC markup) -> 3DS editor markup.
 
     Name placeholders are mapped by role onto the {v:..} tags the 3DS source has (see
     _ROLE_CODES); grammar macros are resolved (<LM_IfSing_X(point,points)> -> points,
     <LM_Gender_X(his,her,its)> -> their); stage directions are dropped. A placeholder
     whose 3DS counterpart cannot be determined stays visible (<pc>) for the translator
-    or the AI. Line breaks are left to the 3DS auto-wrap."""
+    or the AI. Line breaks are left to the 3DS auto-wrap.
+
+    grammar=True keeps the PC grammar as 3DS grammar tags (textcodec.GRAMMAR, resolved in game by
+    grammar.py): <LM_DefSgl_X> -> {the}X, <LM_Cap><LM_IndefSgl_X> -> {A}X, <LM_Plr_X> -> X{pl},
+    <LM_IfSing_N(a,b)> -> {n:a|b} (when the source has a number)."""
     src = _V.findall(source_jp)
     unused = list(dict.fromkeys(src))
+    has_number = any(c not in _NAME_CODES for c in src)
 
     def tag(m: re.Match) -> str:
         body = m.group(1)
         low = body.lower()
         if low == "br":
             return " "
+        if grammar:
+            g = re.match(r"LM_(Def|Indef)?(Sgl|Plr)(Cap)?_(.*)$", body, re.I)
+            if g and not g.group(4).startswith("<"):
+                code = tag(re.match(r"<(.*)>", "<" + g.group(4) + ">"))
+                if code.startswith("{v:"):
+                    kind = (g.group(1) or "").lower()
+                    art = _ARTICLE.get((kind, bool(g.group(3))), "") if g.group(2).lower() == "sgl" else \
+                        ("{the}" if kind == "def" and not g.group(3) else "{The}" if kind == "def" else "")
+                    return art + code + ("{pl}" if g.group(2).lower() == "plr" else "")
         g = re.match(r"LM_If\w*\(([^,()]*),([^()]*)\)", body, re.I)
         if g:                                  # IfSing(point,points), IfSolo(name,the party): plural/party form
             return g.group(2)
@@ -106,7 +123,13 @@ def convert_en(pc_en: str, source_jp: str) -> str:
         return ""                              # voice, facial, camera, colour, flow control ...
 
     cap = "⁣"                              # marks "capitalise the next letter" (<LM_Cap>)
-    t = re.sub(r"<LM_Cap>", cap, pc_en, flags=re.I).replace("%d", "<Value>").replace("%s", "<Value>")
+    t = pc_en
+    if grammar:   # <LM_Cap><LM_DefSgl_X> -> <LM_DefSglCap_X>: the article carries the capital
+        t = re.sub(r"<LM_Cap>(<LM_(?:Def|Indef)(?:Sgl|Plr))_", r"\1Cap_", t, flags=re.I)
+    t = re.sub(r"<LM_Cap>", cap, t, flags=re.I).replace("%d", "<Value>").replace("%s", "<Value>")
+    if grammar and has_number:   # singular / plural by the number: {n:a|b}, resolved in game
+        t = re.sub(r"<LM_IfSing_\w*\(" + _ARG + "," + _ARG + r"\)>",
+                   lambda m: "{n:" + m.group(1) + "|" + m.group(2) + "}", t, flags=re.I)
     # the 3DS script does not branch on party size / plural: take the party / plural form
     # (second argument) before anything else, even when the arguments contain tags
     t = _IF_MACRO.sub(lambda m: m.group(2), t)

@@ -13,24 +13,25 @@ import struct
 import threading
 import zlib
 
-from . import fontimport
+from . import fontcompose, fontimport
 from .bffnt import Bffnt
 from .ctr.formats import open_image
-from .fontpatch import patch_font
 
 _TAG = re.compile(r"(\{\{|\}\}|\{[^{}]*\})")
 VAR_WIDTH_CHARS = 8          # assumed length of a runtime variable (name, item...)
 
 
 class FontSet:
-    """Fonts loaded from the ROM, patched like the exporter does (imported Latin glyphs from
-    `donor`, then the width fixes)."""
+    """Fonts loaded from the ROM, built like the exporter does (Latin glyphs, width fixes,
+    composed accented letters)."""
 
     _lock = threading.Lock()
-    _cache: dict[tuple, "FontSet"] = {}
+    _cache: dict[str, "FontSet"] = {}
+    # changes whenever the built fonts change, so cached preview sheets are replaced
+    KEY = hashlib.sha1(f"{fontimport.VERSION}/{fontcompose.VERSION}".encode()).hexdigest()[:10]
 
-    def __init__(self, rom_path: str, donor: bytes | None = None, cache_dir: str | None = None):
-        self.key = hashlib.sha1(donor).hexdigest()[:10] if donor else "orig"
+    def __init__(self, rom_path: str, cache_dir: str | None = None):
+        self.key = self.KEY
         self.raw: dict[str, bytes] = {}
         self.fonts: dict[str, Bffnt] = {}
         f, ncsd, ncch = open_image(rom_path)
@@ -39,32 +40,32 @@ class FontSet:
             for x in r.files:
                 if x.path.startswith("/font/") and x.path.endswith(".bffnt"):
                     name = x.path.rsplit("/", 1)[-1][:-6]
-                    data = patch_font(fontimport.apply(name, r.read_file(x), donor, cache_dir))
+                    data = fontimport.build(name, r.read_file(x), True, cache_dir)
                     self.raw[name] = data
                     self.fonts[name] = Bffnt.parse(data)
         finally:
             f.close()
 
     @classmethod
-    def get(cls, rom_path: str, donor: bytes | None = None, cache_dir: str | None = None) -> "FontSet":
-        key = (rom_path, hashlib.sha1(donor).hexdigest() if donor else None)
+    def get(cls, rom_path: str, cache_dir: str | None = None) -> "FontSet":
         with cls._lock:
-            fs = cls._cache.get(key)
+            fs = cls._cache.get(rom_path)
             if fs is None:
-                fs = cls._cache[key] = FontSet(rom_path, donor, cache_dir)
+                fs = cls._cache[rom_path] = FontSet(rom_path, cache_dir)
             return fs
 
     @classmethod
     def for_project(cls, project) -> "FontSet":
         """The fonts the exporter will write for this project."""
         import os
-        return cls.get(project.rom_path, fontimport.active_donor(project),
-                       os.path.join(project.workdir, "cache"))
+        return cls.get(project.rom_path, os.path.join(project.workdir, "cache"))
 
 
 def _visible_units(text: str):
-    """Yield (kind, value) for a decoded string: ('ch', c), ('var', tag), ('nl', ''), ('page', '')."""
-    for part in _TAG.split(text):
+    """Yield (kind, value) for a decoded string: ('ch', c), ('var', tag), ('nl', ''), ('page', '').
+    Grammar tags count as their widest resolution ("{The}" as "The ")."""
+    from .textcodec import resolve_grammar
+    for part in _TAG.split(resolve_grammar(text)):
         if not part:
             continue
         if part == "{{":
@@ -111,8 +112,8 @@ def measure(text: str, font: Bffnt) -> dict:
 
 
 # The Japanese game fonts have no accented letters at all (the official PC names use é, ì, æ,
-# ñ, ö ...) and no heart or arrow symbols; with an imported Latin font (fontimport) the accented
-# letters exist. Characters a font lacks are replaced before they reach the game.
+# ñ, ö ...) and no heart or arrow symbols; the exporter adds the accented letters (fontimport,
+# fontcompose). Characters a font lacks are replaced before they reach the game.
 _FOLD_SPECIAL = {
     "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe", "ø": "o", "Ø": "O", "ß": "ss", "ð": "d", "þ": "th",
     "¡": "", "¿": "", "♥": "♪", "♡": "♪", "❤": "♪", "↑": "^", "↓": "v", "←": "<", "→": ">",
@@ -177,12 +178,14 @@ def fits(source: str, translation: str, font: Bffnt) -> bool:
 
 
 def wrap(translation: str, source: str, font: Bffnt, width: int | None = None,
-         lines_per_page: int | None = None) -> str:
+         lines_per_page: int | None = None, extra=()) -> str:
     """Re-flow an English translation to the line width of the source.
 
     Dialogue strings are one 3-line message box; the source marks each line end with
     {CR} (wait for a button press) when it wants the player to advance line by line.
     The same convention is applied to the wrapped English text.
+    extra: further (font, width) limits every line must also meet (other windows/fonts the
+    same text is shown in).
     """
     src = measure(source, font)
     width = width or max(src["max_width"], font.width_of("M") * 8)
@@ -191,15 +194,15 @@ def wrap(translation: str, source: str, font: Bffnt, width: int | None = None,
     plain_lines = [l.replace("{CR}", "") for l in src_lines]
     # Japanese dialogue indents continuation lines after 「; English dialogue does not
     indent = ""
-    var_w = font.width_of("M") * VAR_WIDTH_CHARS * 2 // 3
 
-    def w_of(s: str) -> int:
+    def w_of(s: str, f: Bffnt = font) -> int:
+        vw = f.width_of("M") * VAR_WIDTH_CHARS * 2 // 3
         tot = 0
         for kind, v in _visible_units(s):
             if kind == "ch":
-                tot += font.width_of(v)
+                tot += f.width_of(v)
             elif kind == "var":
-                tot += var_w
+                tot += vw
         return tot
 
     text = translation.replace("{CR}", " ").replace("\n", " ").replace("　", " ")
@@ -209,7 +212,7 @@ def wrap(translation: str, source: str, font: Bffnt, width: int | None = None,
     for word in words:
         cand = (cur + " " + word) if cur else word
         limit = width - (w_of(indent) if lines else 0)
-        if cur and w_of(cand) > limit:
+        if cur and (w_of(cand) > limit or any(w_of(cand, f) > w for f, w in extra)):
             lines.append(cur)
             cur = word
         else:
@@ -220,6 +223,109 @@ def wrap(translation: str, source: str, font: Bffnt, width: int | None = None,
         lines = [lines[0]] + [indent + l for l in lines[1:]]
     sep = "{CR}\n" if waits_at_line_end else "\n"
     return sep.join(lines)
+
+
+_SENTENCE = re.compile(r"(?<=[.!?…♪])[\"'”’)]*\s+")
+
+
+def page_lines(text: str) -> list[int]:
+    """Number of lines of every page ({CR}-separated block) of a message-window text."""
+    return [b.strip("\n").count("\n") + 1 for b in re.split(r"\{CR\}", text)]
+
+
+def wrap_paged(translation: str, source: str, font: Bffnt, width: int, lines_per_page: int = 3,
+               extra=()) -> str:
+    """Wrap for the scrolling message window: any number of pages ({CR} = wait for a button,
+    then scroll), at most `lines_per_page` lines each. The translation's own {CR} stay page
+    ends; a longer page is split after a sentence where possible, otherwise every
+    `lines_per_page` lines. Sources that wait after every line keep that style."""
+    src_lines = source.split("\n")
+    if len(src_lines) > 1 and all(l.endswith("{CR}") for l in src_lines[:-1]):
+        return wrap(translation, source, font, width=width, extra=extra)
+
+    def lines_of(t: str) -> list[str]:
+        w = wrap(t, "x", font, width=width, extra=extra)
+        return w.split("\n") if w else []
+
+    pages: list[list[str]] = []
+    for block in re.split(r"\{CR\}\n?", translation):
+        flat = block.replace("\n", " ").strip()
+        if not flat:
+            continue
+        ls = lines_of(flat)
+        if len(ls) <= lines_per_page:
+            pages.append(ls)
+            continue
+        cur = ""
+        for sent in _sentences(flat):
+            cand = (cur + " " + sent) if cur else sent
+            if cur and len(lines_of(cand)) > lines_per_page:
+                pages.append(lines_of(cur))
+                cur = sent
+            else:
+                cur = cand
+        if cur:
+            pages.append(lines_of(cur))
+    out: list[list[str]] = []
+    for p in pages:     # a single sentence longer than a page: split by lines
+        out += [p[i:i + lines_per_page] for i in range(0, len(p), lines_per_page)]
+    return "{CR}\n".join("\n".join(p) for p in out)
+
+
+def wrap_pages(translation: str, source: str, font: Bffnt, width: int, lines_per_page: int = 3,
+               max_units: int | None = None, extra=()) -> str:
+    """Wrap for NPC talk lines that may become several message boxes (ietalk.py): pages of at
+    most `lines_per_page` lines (and `max_units` encoded units), joined by {PAGE}. A page ends
+    after a sentence where possible, otherwise after `lines_per_page` lines. Within a page the
+    source's line style is kept ({CR} at every line end when the source does that)."""
+    from .textcodec import encode_str
+    flat = translation.replace("{PAGE}", " ").replace("{CR}", " ").replace("\n", " ").strip()
+
+    def lay(t: str) -> str:
+        return wrap(t, source, font, width=width, extra=extra)
+
+    def ok(t: str) -> bool:
+        w = lay(t)
+        return (w.count("\n") + 1 <= lines_per_page
+                and (max_units is None or len(encode_str(w)) <= max_units))
+
+    if ok(flat):
+        return lay(flat)
+    pages, cur = [], ""
+    for sent in _sentences(flat):
+        cand = (cur + " " + sent) if cur else sent
+        if cur and not ok(cand):
+            pages.append(cur)
+            cur = sent
+        else:
+            cur = cand
+    if cur:
+        pages.append(cur)
+    out = []
+    for p in pages:         # a sentence longer than a page: cut it by lines
+        if ok(p):
+            out.append(lay(p))
+            continue
+        words, cur = p.split(" "), ""
+        for wd in words:
+            cand = (cur + " " + wd) if cur else wd
+            if cur and not ok(cand):
+                out.append(lay(cur))
+                cur = wd
+            else:
+                cur = cand
+        if cur:
+            out.append(lay(cur))
+    return "{PAGE}".join(out)
+
+
+def _sentences(text: str) -> list[str]:
+    parts, last = [], 0
+    for m in _SENTENCE.finditer(text):
+        parts.append(text[last:m.start() + len(m.group(0).rstrip())].strip())
+        last = m.end()
+    parts.append(text[last:].strip())
+    return [p for p in parts if p]
 
 
 # ---------------------------------------------------------------------- sheet export

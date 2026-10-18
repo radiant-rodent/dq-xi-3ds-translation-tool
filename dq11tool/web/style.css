@@ -120,6 +120,10 @@ textarea#tr { width: 100%; min-height: 110px; resize: vertical; font-size: 15px;
 .stats { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
 .stats b { color: var(--text); font-weight: 600; }
 .stats .over { color: var(--bad); }
+.box-ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.box-ctl input[type=number] { width: 64px; padding: 2px 4px; }
+.box-ctl button { font-size: 12px; padding: 2px 8px; }
+.box-ctl .custom { color: var(--accent, #e8b84a); }
 .problems { margin: 6px 0; padding: 0; list-style: none; }
 .problems li { color: var(--bad); font-size: 12.5px; }
 .problems li::before { content: "⚠ "; }

@@ -124,6 +124,14 @@ class Bxon:
         out = bytearray(self.data)
         by_off = {s.offset: s for s in self.strings}
         self.skipped = []
+        free: list[list[int]] = []          # [payload start, size] of reusable space
+        moved: list[tuple[BxonString, bytes]] = []
+
+        def release(start: int, size: int):
+            # a block needs its marker before it, so a split-off region must hold marker + payload
+            if size >= 4:
+                free.append([start, size])
+
         for off, text in replacements.items():
             s = by_off.get(off)
             if s is None:
@@ -136,15 +144,40 @@ class Bxon:
                 self.skipped.append((off, "too long for its slot and no pointer to it is known"))
                 continue
             if len(payload) <= s.capacity:
-                payload += b"@" * (s.capacity - len(payload))
-                out[off:off + s.capacity] = payload
+                out[off:off + s.capacity] = payload + b"@" * (s.capacity - len(payload))
+                if s.capacity - len(payload) >= 8:
+                    out[off + len(payload):off + len(payload) + 4] = MARK
+                    release(off + len(payload) + 4, s.capacity - len(payload) - 4)
                 continue
-            # append as new block
-            while len(out) % 4:
-                out += b"@"
-            out += MARK
-            new_off = len(out)
-            out += payload
+            # The old slot is not reused: the game can reach a string through a pointer the
+            # structural walk does not find (ui_text.bxon item counts), which would then
+            # read whatever string was placed there instead of the old text.
+            moved.append((s, payload))
+
+        # Strings that outgrew their slot go into the padding left after shortened strings
+        # (nothing points into the middle of a slot) before anything is appended, and
+        # identical strings share one block, to keep the files from growing more than needed.
+        placed: dict[bytes, int] = {}
+        for s, payload in sorted(moved, key=lambda m: -len(m[1])):
+            new_off = placed.get(payload)
+            if new_off is None:
+                fit = [f for f in free if f[1] >= len(payload)]
+                if fit:
+                    f = min(fit, key=lambda f: f[1])
+                    new_off = f[0]
+                    rest = f[1] - len(payload)
+                    out[new_off:new_off + f[1]] = payload + b"@" * rest
+                    free.remove(f)
+                    if rest >= 8:
+                        out[new_off + len(payload):new_off + len(payload) + 4] = MARK
+                        release(new_off + len(payload) + 4, rest - 4)
+                else:
+                    while len(out) % 4:
+                        out += b"@"
+                    out += MARK
+                    new_off = len(out)
+                    out += payload
+                placed[payload] = new_off
             for r in s.refs:
                 struct.pack_into("<I", out, r, (new_off - r) & 0xFFFFFFFF)
         return bytes(out)

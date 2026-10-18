@@ -2,7 +2,8 @@
 
 The Japanese source only tells how wide *this* string is, but the window or field it is
 drawn into is sized for the longest entry it ever shows. So the limit of a string is:
-  - UI layout panes: the pane's own width (stored in the entry context, "(80×16px)")
+  - UI layout panes and the dialogue window: the window's real width (window(): the pane width
+    corrected for its font size and scale; the 350px message window)
   - table strings (items, monsters, dialogue ...): the widest line and the most lines of
     any string in the same table column (file, archive entry, member, table type)
 A string used in several places must fit the tightest of them. The result is never
@@ -27,14 +28,15 @@ _cache: dict[str, "BoxIndex"] = {}
 
 
 class BoxIndex:
-    def __init__(self, db, font):
+    def __init__(self, db, font, window=None, movable: set[int] = frozenset()):
         self.font = font
-        rows = db.execute("SELECT e.source_id, e.kind, e.file, e.entry, e.member, e.label, e.context, e.category,"
+        rows = db.execute("SELECT e.source_id, e.kind, e.file, e.entry, e.member, e.loc, e.label, e.context, e.category,"
                           " e.capacity, s.text FROM entry e JOIN source s ON s.id = e.source_id").fetchall()
         # strings stored in the executable have a fixed slot: characters, not pixels, are the limit
+        # (unless the exporter can move them to free space)
         self.slot_chars: dict[int, int] = {}
         for r in rows:
-            if r["capacity"]:
+            if r["capacity"] and r["loc"] not in movable:
                 c = r["capacity"] // 2 - 1
                 self.slot_chars[r["source_id"]] = min(c, self.slot_chars.get(r["source_id"], c))
         own: dict[int, tuple[int, int]] = {}
@@ -82,12 +84,15 @@ class BoxIndex:
             sid = r["source_id"]
             w, n, _ = own[sid]
             key = (r["file"], r["entry"], r["member"], r["label"])
-            m = _PANE.search(r["context"] or "") if r["kind"] == "bflyt" else None
-            bw = int(m.group(1)) if m else group_w[key]
+            real = window(r) if window else None
+            m = _PANE.search(r["context"] or "") if r["kind"] == "bflyt" and real is None else None
+            if m:
+                real = int(m.group(1))
+            bw = real if real is not None else group_w[key]
             # a short one-line message is still shown in the multi-line message window and may
             # wrap there; labels, names and menu entries stay on one line
             bl = group_l[key] if (n >= 2 or r["category"] in MESSAGE_CATEGORIES) else n
-            if not m and n >= 2 and r["category"] not in MESSAGE_CATEGORIES and key in ml_w:
+            if real is None and n >= 2 and r["category"] not in MESSAGE_CATEGORIES and key in ml_w:
                 bw, bl = ml_w[key], ml_l[key]
             cur = limits.get(sid)
             limits[sid] = [bw, bl] if cur is None else [min(cur[0], bw), min(cur[1], bl)]
@@ -121,12 +126,12 @@ class BoxIndex:
         return max(0, max(tw) - lim["width"]) / lim["width"] + max(0, len(tw) - lim["lines"])
 
 
-def index(project, font) -> BoxIndex:
+def index(project, font, window=None) -> BoxIndex:
     """Built once per workspace (source texts never change after extraction)."""
     key = (project.db_path, id(font))     # fonts are cached for the process lifetime
     with _lock:
         if key not in _cache:
-            _cache[key] = BoxIndex(project.db(), font)
+            _cache[key] = BoxIndex(project.db(), font, window, project.code_movable())
         return _cache[key]
 
 

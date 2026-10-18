@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .export import validate
-from . import boxfit
+from . import gamefont
 from .pcmatch import has_markup
 from .metrics import FontSet, fold_to_font, wrap
 from .project import Project
@@ -267,7 +267,7 @@ def _select(project: Project, ids, scope, overwrite: bool, limit: int | None = N
     return out
 
 
-def needs_redo(bi: boxfit.BoxIndex, sid: int, source: str, translation: str, gloss=None) -> bool:
+def needs_redo(bi: "gamefont.GameFonts", sid: int, source: str, translation: str, gloss=None) -> bool:
     """A draft is redone when it does not fit its window, still contains PC markup the 3DS
     line cannot express (<pc> ...), lost / invented a {v:..} placeholder, or renders a
     glossary name differently from the official one."""
@@ -335,9 +335,13 @@ def _postprocess(project: Project, source: str, english: str, sid: int | None = 
     english = fold_to_font(english, _font(project))
     box = _boxes(project).get(sid, source) if sid is not None else None
     if "\n" in source or (box and box["lines"] > 1):
-        # wrap to the width of the window the text appears in, not of the Japanese lines;
-        # short one-line messages may use the other lines of their message window
-        english = wrap(english, source, _font(project), width=box["width"] if box else None)
+        # wrap to the width of the window the text appears in (in the font it is drawn with),
+        # not of the Japanese lines; short one-line messages may use the other lines of their
+        # message window
+        if sid is not None:
+            english = _boxes(project).wrap(sid, source, english)
+        else:
+            english = wrap(english, source, _font(project))
     else:
         english = english.replace("{CR}", "").replace("\n", " ")
     return english
@@ -417,12 +421,12 @@ def _user_payload(items: list[dict]) -> str:
 
 
 def _font(project: Project):
-    # the editor's "too wide" warning is measured with this font, so the budget uses it too
     return FontSet.for_project(project).fonts["3D14"]
 
 
-def _boxes(project: Project) -> boxfit.BoxIndex:
-    return boxfit.index(project, _font(project))
+def _boxes(project: Project) -> "gamefont.GameFonts":
+    """Room of each string in the font it is drawn with (same as the editor's warnings)."""
+    return gamefont.for_project(project)
 
 
 def _system(gloss: list[dict]) -> str:

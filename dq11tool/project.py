@@ -79,6 +79,11 @@ class Project:
         self.config = self._load_config()
         with self.db() as c:
             c.executescript(SCHEMA)
+            cols = {r[1] for r in c.execute("PRAGMA table_info(source)")}
+            # window size set by hand (px of the string's font, lines); NULL = automatic
+            for col in ("box_width", "box_lines"):
+                if col not in cols:
+                    c.execute(f"ALTER TABLE source ADD COLUMN {col} INTEGER")
 
     # ------------------------------------------------------------------ infra
     def db(self) -> sqlite3.Connection:
@@ -108,6 +113,28 @@ class Project:
     @property
     def extracted(self) -> bool:
         return bool(self.config.get("extracted"))
+
+    def code_movable(self) -> set[int]:
+        """Offsets of executable strings the exporter can move to free space when the
+        translation is longer than the original slot (so they have no length limit)."""
+        if getattr(self, "_code_movable", None) is None:
+            from .ctr.formats import open_image
+            movable = set()
+            if self.rom_path and os.path.exists(self.rom_path):
+                f, _ncsd, ncch = open_image(self.rom_path)
+                try:
+                    exheader = ncch.exheader()
+                    code = ncch.exefs().read(".code")
+                    if exheader[0x0D] & 1:
+                        code = blz.decompress(code)
+                finally:
+                    f.close()
+                mover = codestr.Mover(code, exheader)
+                for r in self.db().execute("SELECT DISTINCT loc, capacity FROM entry WHERE kind='code'"):
+                    if mover.why_not(r["loc"], r["capacity"]) is None:
+                        movable.add(r["loc"])
+            self._code_movable = movable
+        return self._code_movable
 
     # ------------------------------------------------------------------ extraction
     def extract(self, rom_path: str, dump_files: bool = True, progress: Progress | None = None):
