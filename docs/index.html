@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DQ XI 3DS English Patcher</title>
+<meta name="description" content="Patch your own Dragon Quest XI (3DS) cartridge dump to English, entirely in your browser.">
+<style>
+  :root {
+    --bg: #f5f3ee; --card: #ffffff; --text: #1d1b18; --muted: #6b665d; --line: #e2ddd3;
+    --accent: #1f5fbf; --accent-text: #ffffff; --ok: #1d7a45; --err: #b3261e; --bar: #dcd6ca;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15171a; --card: #1e2126; --text: #e9e6e0; --muted: #a09a90; --line: #30343b;
+      --accent: #6aa1ff; --accent-text: #0d1420; --ok: #5cc98a; --err: #ff8a80; --bar: #30343b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15171a; --card: #1e2126; --text: #e9e6e0; --muted: #a09a90; --line: #30343b;
+    --accent: #6aa1ff; --accent-text: #0d1420; --ok: #5cc98a; --err: #ff8a80; --bar: #30343b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 6px; }
+  .lede { color: var(--muted); margin: 0 0 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 1.05rem; margin: 0 0 10px; display: flex; gap: 10px; align-items: baseline; }
+  .step { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .drop { display: block; border: 2px dashed var(--line); border-radius: 10px; padding: 22px; text-align: center;
+          cursor: pointer; color: var(--muted); transition: border-color .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--text); }
+  .drop input { display: none; }
+  .drop strong { color: var(--accent); }
+  .info { margin-top: 12px; font-size: .95rem; overflow-wrap: anywhere; }
+  .ok { color: var(--ok); } .err { color: var(--err); }
+  .buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+  h2.section { font-size: 1.15rem; margin: 32px 0 4px; }
+  ol.hint { margin: 12px 0 0; }
+  a.button { display: inline-block; text-decoration: none; }
+  button, a.button { font: inherit; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text);
+           padding: 9px 16px; border-radius: 8px; cursor: pointer; }
+  a.button:hover { filter: brightness(1.08); }
+  button.secondary { background: transparent; color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  .hint { color: var(--muted); font-size: .9rem; margin: 10px 0 0; }
+  progress { width: 100%; height: 10px; margin-top: 14px; accent-color: var(--accent); }
+  #status { margin-top: 8px; font-size: .95rem; min-height: 1.5em; overflow-wrap: anywhere; }
+  details { margin-top: 10px; font-size: .95rem; }
+  summary { cursor: pointer; color: var(--muted); }
+  ol, ul { padding-left: 22px; margin: 8px 0; }
+  code { font-size: .9em; background: var(--bar); padding: 1px 5px; border-radius: 4px; }
+  a { color: var(--accent); }
+  footer { color: var(--muted); font-size: .85rem; margin-top: 28px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Dragon Quest XI (3DS) English Patcher</h1>
+  <p class="lede">Play the Japanese-only 3DS version of Dragon Quest XI in English: on a modded 3DS with your
+    cartridge, or in an emulator with your own dump.</p>
+
+  <section class="card">
+    <h2>On a 3DS with Luma3DS</h2>
+    <div class="buttons"><a class="button" id="lfs-link" href="patch/DQXI_EN_layeredfs.zip" download>Download the LayeredFS patch (.zip)</a></div>
+    <ol class="hint">
+      <li>Unzip it to the root of the SD card (it contains <code>luma/titles/0004000000199200/</code>).</li>
+      <li>Hold SELECT while turning the 3DS on and enable “Enable game patching”.</li>
+      <li>Start the game from your Japanese cartridge as usual.</li>
+    </ol>
+  </section>
+
+  <h2 class="section">For emulators, flash carts or an installed copy: patch your own dump</h2>
+  <p class="lede">Everything happens on this page: your game file is never uploaded and nothing needs to be installed.</p>
+
+  <section class="card">
+    <h2><span class="step">1</span> Choose your game</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="rom" accept=".3ds,.cci">
+      <span><strong>Choose a .3ds file</strong> or drop it here</span>
+    </label>
+    <div class="info" id="rom-info"></div>
+    <details>
+      <summary>Which file do I need?</summary>
+      <ul>
+        <li>A <b>decrypted</b> dump of the Japanese cartridge <i>ドラゴンクエストXI 過ぎ去りし時を求めて</i>
+          (title ID <code>0004000000199200</code>), e.g. made with GodMode9.</li>
+        <li>Trimmed or untrimmed dumps both work; encrypted dumps and .cia files do not.</li>
+        <li>Only the original, unmodified game is accepted; the page checks it before patching.</li>
+      </ul>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">2</span> Create the English version</h2>
+    <div class="buttons">
+      <button id="make-3ds" disabled>Save patched .3ds</button>
+      <button id="make-cia" class="secondary" disabled>Save installable .cia</button>
+    </div>
+    <p class="hint"><b>.3ds</b>: for emulators (Azahar, Citra forks) and flash carts.<br>
+      <b>.cia</b>: to install the English game on a modded 3DS with FBI (needs Luma3DS, which provides
+      the signature patches; replaces an installed copy of the game).<br>
+      Both are about as large as your dump and are saved like any other download.</p>
+    <progress id="bar" max="1" value="0" hidden></progress>
+    <div id="status"></div>
+  </section>
+
+  <details class="card">
+    <summary>Advanced: use another patch file</summary>
+    <p class="hint">The page loads the current patch from this site. To try a different build, pick a
+      <code>.dq11patch</code> file made by the translation tool.</p>
+    <input type="file" id="patch-file" accept=".dq11patch">
+    <div class="info" id="patch-info"></div>
+  </details>
+
+  <footer>A fan translation, not affiliated with Square Enix or Nintendo. Dragon Quest is a trademark of Square Enix.
+    You need to own the game. <a href="https://github.com/radiant-rodent/dq-xi-3ds-translation-tool">Source code &amp; issues</a></footer>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

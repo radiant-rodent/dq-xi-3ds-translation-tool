@@ -1,0 +1,41 @@
+# Game images / ROMs (copyrighted - never commit)
+*.3ds
+*.cia
+*.cxi
+*.cci
+*.app
+*.pak
+
+# Local tooling / agent config
+.claude/
+
+# Project working data (contains secrets.json, extracted game data)
+workspace/
+
+# Emulator binaries, user data and configs
+_emutest/
+
+# Secrets
+secrets.json
+*.env
+.env*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# Copyrighted game assets the tool needs locally (see README)
+dq11tool/data/m7_win_p14.bcfnt
+dq11tool/data/logo_en.png
+
+# Build outputs (only the published patch in docs/patch is tracked)
+*.dq11patch
+!docs/patch/*.dq11patch

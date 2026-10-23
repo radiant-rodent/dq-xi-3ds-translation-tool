@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DQXI 3DS Translator</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">XI</span><div><b>Dragon Quest XI</b><small>3DS English translation studio</small></div></div>
+  <nav id="nav">
+    <button data-view="editor" class="active">Editor</button>
+    <button data-view="glossary">Glossary</button>
+    <button data-view="project">Project</button>
+    <button data-view="build" class="accent">Build ROM</button>
+  </nav>
+  <div class="overall" title="Translated strings (excluding internal categories)">
+    <div class="bar"><span id="overall-done"></span><span id="overall-draft"></span></div>
+    <small id="overall-text">–</small>
+  </div>
+</header>
+
+<div id="jobbar" class="jobbar hidden">
+  <div class="jobinfo"><b id="job-name"></b> <span id="job-phase"></span></div>
+  <div class="bar"><span id="job-progress"></span></div>
+  <small id="job-count"></small>
+  <button id="job-stop" class="hidden">Stop</button>
+</div>
+
+<!-- ============================== SETUP ============================== -->
+<main id="view-setup" class="view hidden">
+  <section class="card setup">
+    <h1>Open the game</h1>
+    <p>Select a <b>decrypted</b> Dragon Quest XI (3DS, Japanese) <code>.3ds</code> image. The tool unpacks the RomFS,
+       decompresses all archives and collects every piece of text with its context into a translation project.
+       Existing translations are kept if you extract again.</p>
+    <label class="field">Game image (.3ds / .cci)
+      <div class="row"><input id="rom-path" type="text" placeholder="C:\path\to\DQXI.3ds"><button id="rom-browse">Browse…</button></div>
+    </label>
+    <label class="check"><input id="dump-files" type="checkbox" checked> Also extract all game files to the workspace
+      (<code>workspace/extracted</code>, ~2.7 GB) – needed only if you want to edit graphics or other assets</label>
+    <p class="muted">Workspace: <code id="workdir"></code></p>
+    <div class="row"><button id="extract-btn" class="primary">Extract text</button><span id="setup-msg" class="msg"></span></div>
+  </section>
+</main>
+
+<!-- ============================== EDITOR ============================== -->
+<main id="view-editor" class="view editor hidden">
+  <aside class="sidebar">
+    <input id="search" type="search" placeholder="Search Japanese, English, notes…">
+    <div class="seg" id="scope-filter" title="Restrict the search box to Japanese or English text">
+      <button data-scope="all" class="active">All text</button>
+      <button data-scope="jp">Japanese</button>
+      <button data-scope="en">English</button>
+    </div>
+    <div class="seg" id="status-filter">
+      <button data-status="all" class="active">All</button>
+      <button data-status="todo">To do</button>
+      <button data-status="draft">Draft</button>
+      <button data-status="translated">Done</button>
+      <button data-status="problems" title="Translations that do not fit their window, lost a {v:..} placeholder, still contain PC markup or use characters missing from the game font">⚠ Problems</button>
+    </div>
+    <div class="cat-head"><span>Contexts</span><label class="mini"><input type="checkbox" id="show-hidden"> internal</label></div>
+    <ul id="categories" class="categories"></ul>
+  </aside>
+
+  <section class="list">
+    <div class="toolbar">
+      <span id="list-count" class="muted"></span>
+      <select id="file-filter" title="Limit to one game file"><option value="">All files</option></select>
+      <select id="pc-filter" title="Match with the official PC (Steam) translation"><option value="">PC version: all</option><option value="official">Official PC text used</option><option value="similar">Similar PC line exists</option><option value="none">Nothing similar on PC</option></select>
+      <select id="sort"><option value="">Game order</option><option value="length">Longest first</option><option value="recent">Recently edited</option></select>
+      <span class="spacer"></span>
+      <button id="mt-view" title="Create draft translations for the untranslated strings of the current context">✦ Draft translate…</button>
+      <div class="pager"><button id="prev-page">‹</button><span id="page-info"></span><button id="next-page">›</button></div>
+    </div>
+    <div id="rows" class="rows"></div>
+  </section>
+
+  <section class="detail" id="detail">
+    <div class="empty muted">Select a string on the left.</div>
+  </section>
+</main>
+
+<!-- ============================== GLOSSARY ============================== -->
+<main id="view-glossary" class="view hidden">
+  <section class="card wide">
+    <h1>Glossary</h1>
+    <p class="muted">Consistent names and terms. Used by the draft translator and shown next to matching Japanese text in the editor.</p>
+    <table class="gloss"><thead><tr><th>Japanese</th><th>English</th><th></th></tr></thead><tbody id="gloss-body"></tbody></table>
+    <div class="row"><button id="gloss-add">+ Add term</button><button id="gloss-save" class="primary">Save glossary</button><span id="gloss-msg" class="msg"></span></div>
+  </section>
+</main>
+
+<!-- ============================== PROJECT ============================== -->
+<main id="view-project" class="view hidden">
+  <section class="card wide">
+    <h1>Project</h1>
+    <dl id="project-info" class="info"></dl>
+    <div class="row">
+      <button id="reextract">Re-extract from game…</button>
+      <button id="open-workdir">Open workspace folder</button>
+    </div>
+  </section>
+  <section class="card wide" id="pc-card">
+    <h2>Official PC translation</h2>
+    <p class="muted">The Steam release of Dragon Quest XI contains the Japanese script next to the official English one.
+      Strings whose Japanese is identical are filled in with the official English automatically (hand edits are kept);
+      for the others the most similar official lines are shown in the editor and given to the auto-translator as reference.</p>
+    <label class="field">PC game folder <div class="row"><input id="pc-path" type="text" style="flex:1"><button id="pc-browse">Browse…</button></div></label>
+    <label class="field">Japanese text pak <span class="muted">(the PC release has no Japanese script; a Japanese-text mod pak such as <code>pakchunk0-WindowsNoEditor_P_JPText_*.pak</code> supplies it, paired by line id)</span>
+      <div class="row"><input id="pc-jp" type="text" style="flex:1" placeholder="optional: path to the Japanese text .pak"><button id="pc-jp-browse">Browse…</button></div></label>
+    <div class="row"><button id="pc-import" class="primary">Import PC script &amp; match</button><button id="pc-rematch">Re-run matching</button><span id="pc-msg" class="msg"></span></div>
+    <dl id="pc-info" class="info"></dl>
+  </section>
+  <section class="card wide">
+    <h2>Import / export translations</h2>
+    <p class="muted">Share work with other translators or edit in a spreadsheet. Imports match strings by their Japanese text.</p>
+    <div class="row">
+      <a class="btn" href="/api/translations/export?format=json">Export JSON</a>
+      <a class="btn" href="/api/translations/export?format=csv">Export CSV</a>
+      <a class="btn" href="/api/translations/export?format=csv&only=all">Export all strings (CSV template)</a>
+    </div>
+    <div class="row">
+      <input type="file" id="import-file" accept=".json,.csv">
+      <label class="check"><input type="checkbox" id="import-overwrite"> overwrite existing translations</label>
+      <button id="import-btn">Import</button><span id="import-msg" class="msg"></span>
+    </div>
+  </section>
+  <section class="card wide" id="mt-card">
+    <h2>Auto-translate (machine drafts)</h2>
+    <p class="muted">Creates <b>draft</b> translations for untranslated strings so you can review instead of typing from scratch.
+      Drafts are marked yellow, can be excluded from builds, and are never overwritten unless you ask. Stopping and
+      starting again continues with the strings that are still untranslated. The text is sent to the selected service.</p>
+    <div class="grid2">
+      <div>
+        <label class="field">Service <select id="mt-backend"></select></label>
+        <div id="mt-openai">
+          <label class="field">Provider <select id="mt-preset"></select></label>
+          <label class="field">Base URL <input id="mt-base" type="text" style="width:100%" placeholder="https://…/v1"></label>
+          <label class="field">Model
+            <div class="row"><select id="mt-model-select" title="Models offered by the service (click Load models)"><option value="">— Load models to choose —</option></select><button id="mt-load-models">Load models</button></div>
+            <input id="mt-model" type="text" list="mt-models" placeholder="model id, e.g. deepseek-v4.1-flash" style="margin-top:6px">
+            <datalist id="mt-models"></datalist>
+          </label>
+        </div>
+        <label class="field" id="mt-key-field">API key
+          <input id="mt-key" type="password" style="width:100%" placeholder="paste your key" autocomplete="off">
+          <small id="mt-key-state" class="muted"></small>
+        </label>
+        <label class="check"><input type="checkbox" id="mt-remember"> Remember the key on this computer (stored in <code>workspace/secrets.json</code>)</label>
+      </div>
+      <div>
+        <label class="field inline">Parallel requests <input type="number" id="mt-conc" min="1" max="256" value="4" title="More parallel requests are faster but may hit the provider's rate limit (429 responses are retried automatically)"></label>
+        <label class="field inline">Strings per request <input type="number" id="mt-batch" min="1" max="100" value="30"></label>
+        <div class="row"><button id="mt-save">Save settings</button><button id="mt-test">Test with 3 lines</button><span id="mt-set-msg" class="msg"></span></div>
+        <div id="mt-test-out"></div>
+        <h3>Run</h3>
+        <label class="field">What to translate <select id="mt-scope"></select></label>
+        <label class="check"><input type="checkbox" id="mt-too-wide" checked> also redo drafts that are too wide for their box, lost a {v:..} placeholder or still contain PC markup, and condense official PC lines that do not fit the 3DS window <span id="mt-too-wide-n" class="muted"></span></label>
+        <label class="check"><input type="checkbox" id="mt-overwrite"> also replace existing drafts/translations (normally off)</label>
+        <div class="row"><button id="mt-start" class="primary">Start auto-translate</button><button id="mt-stop" class="hidden">Stop</button><span id="mt-msg" class="msg"></span></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ============================== BUILD ============================== -->
+<main id="view-build" class="view hidden">
+  <section class="card wide">
+    <h1>Build the translated game</h1>
+    <div class="grid2">
+      <div>
+        <label class="field">Output folder
+          <div class="row"><input id="out-dir" type="text"><button id="out-browse">Browse…</button></div>
+        </label>
+        <h3>Outputs</h3>
+        <label class="check"><input type="checkbox" id="o-make_3ds" checked> <b>.3ds image</b> – for emulators (Citra, Azahar, Lime3DS…) and flashcarts</label>
+        <label class="check"><input type="checkbox" id="o-make_layeredfs" checked> <b>Luma3DS LayeredFS patch</b> – copy to the SD card of a modded 3DS and play from your cartridge or installed copy</label>
+        <label class="check"><input type="checkbox" id="o-make_cia"> <b>.cia</b> – installable with FBI on a modded 3DS (replaces an installed copy)</label>
+        <label class="check"><input type="checkbox" id="o-make_patch"> <b>Browser patch</b> (<code>.dq11patch</code>) – for the web patcher in <code>docs/</code>: players patch their own dump into a .3ds or .cia, no game data shipped</label>
+      </div>
+      <div>
+        <h3>Options</h3>
+        <label class="check"><input type="checkbox" id="o-include_drafts" checked> Include draft (machine) translations</label>
+        <label class="check"><input type="checkbox" id="o-font_fixes" checked> Proportional English font spacing</label>
+        <label class="check"><input type="checkbox" id="o-latin_keyboard" checked> Latin keyboard for name entry (A–Z and accented letters)</label>
+        <label class="field inline">UI text buffer size ×<input type="number" id="o-expand_text_buffers" min="1" max="2" step="0.25" value="1" title="1 = exact fit + runtime growth; larger values pre-allocate more UI layout memory"></label>
+        <label class="check"><input type="checkbox" id="o-verify" checked> Verify the image after building</label>
+        <label class="check"><input type="checkbox" id="o-keep_update_partitions" checked> Keep the cartridge's system-update partition</label>
+      </div>
+    </div>
+    <div class="row"><button id="build-btn" class="primary big">Build</button><span id="build-msg" class="msg"></span></div>
+    <div id="build-result"></div>
+  </section>
+  <section class="card wide howto">
+    <h2>How to play</h2>
+    <ol>
+      <li><b>Emulator:</b> open <code>…_EN.3ds</code> in Citra/Azahar like any game.</li>
+      <li><b>Modded 3DS (Luma3DS):</b> copy the <code>luma</code> folder from <code>layeredfs</code> to the root of the SD card,
+        hold <b>SELECT</b> while powering on and enable <i>“Enable game patching”</i>. Start the game from the cartridge or the installed title.</li>
+      <li><b>Modded 3DS (CIA):</b> install <code>…_EN.cia</code> with FBI.</li>
+    </ol>
+  </section>
+</main>
+
+<div id="modal" class="modal hidden"><div class="modal-box"><div id="modal-body"></div><div class="row end"><button id="modal-cancel">Cancel</button><button id="modal-ok" class="primary">OK</button></div></div></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
