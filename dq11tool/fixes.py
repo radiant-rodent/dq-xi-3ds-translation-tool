@@ -8,6 +8,7 @@ so later edits in the editor are never overwritten. Origin 'manual', status 2.
 from __future__ import annotations
 
 import argparse
+import re
 import time
 
 from . import gamefont
@@ -20,11 +21,14 @@ from .project import Project
 SQUEEZED = "squeezed"    # third element: a layout label the export narrows to fit; not wrapped
 
 FIXES: dict[int, tuple] = {
-    13: (None, "{A}{v:2} appears{v:5}"),
+    13: (None, "{A}{v:2} {s:appears|appear}{v:5}"),
     14: (None, "A group of {v:2}{pl} appears{v:5}"),
     15: (None, "A group of enemies appears{v:5}"),
-    16: (None, "{The}{v:2} is surrounded{v:5}"),
+    16: (None, "{The}{v:2} {s:is|are} surrounded{v:5}"),
     17: (None, "{The}{v:2}{pl} are surrounded{v:5}"),
+    201: (None, "{A}{v:2} {s:appears|appear}!"),
+    2113: (None, "{A}{v:2} {s:shows|show} up!"),
+    2114: (None, "{A}{v:2} {s:comes|come} up out of the ground!"),
     18: (None, "The group of enemies is surrounded{v:5}"),
     19: (None, "The party is surrounded by {a}{v:2}{v:5}"),
     20: (None, "The party is surrounded by a group of {v:2}{pl}{v:5}"),
@@ -181,6 +185,17 @@ FIXES: dict[int, tuple] = {
             "Kurucchi can be heard humming from inside.{CR}\nKurucchi seems to be getting something ready."),
     26475: ("Kulchi went back to the altar room!", "Kurucchi went back to the altar room!"),
     26479: ("Kulchi joined your party!", "Kurucchi joined your party!"),
+    # Party names in full and as the PC calls them (user 2026-10-24): 謎の青年 is Erik in the
+    # Heliodor dungeon (PC GN00003 "Hooded Stranger"), サンポ大僧正 is only ever "High Lama"
+    # (PC UN00083); べロニカ (hiragana べ) is the forbidden-names variant of ベロニカ
+    11500: ("Stranger", "Hooded Stranger", SQUEEZED),
+    11508: ("Sanpo", "High Lama", SQUEEZED),
+    11496: ("Vero", "Veronica", SQUEEZED),
+    # "Sylv" -> "Sylvando" (RENAMES) needs a fourth line in this cutscene box: reworded
+    33311: ("We made a pretty good team didn't we, Sylv?{CR}\nBut that's all over. I'm with Arachtagon now. I{CR}\n"
+            "don't need you any more. I don't need anybody!",
+            "We were a good team, weren't we, Sylvando?{CR}\nBut that's over. I'm with Arachtagon now. I{CR}\n"
+            "don't need you any more. I don't need anybody!"),
     # Info > Recap: "Battles Won: 8x" / "Fun-Size Forge Uses: 8x" ({v:8}回): the number alone
     41613: ("{v:8}x", "{v:8}", SQUEEZED),
     # mini-medal hat shop column header (90 px, runtime fit 0.87)
@@ -284,7 +299,7 @@ FIXES: dict[int, tuple] = {
     8740: ("Restless Knight's Identity Revealed", "The Restless Knight's Identity Revealed", SQUEEZED),  # 0.99
     9038: ('Door of Departure', 'The Door of Departure', SQUEEZED),  # 0.95
     9041: ('Champs Sauvage', 'The Champs Sauvage', SQUEEZED),
-    9608: ("Perfectionist'\nPearls", "Perfectionist's\nPearls"),
+    9608: ("Perfectionist's\nPearls", "Perfectionist's pearl"),  # official item name, singular
     9756: ('Bleached seashell', 'Sun-bleached seashell', SQUEEZED),  # 0.92
     9891: ('Thunderstrm\nsword', 'Thunderstorm\nsword'),
     9967: ('Thunder\nskean', 'Thunderstorm\nskean'),
@@ -303,6 +318,32 @@ FIXES: dict[int, tuple] = {
     41982: ('Royal Library - L3', 'The Royal Library - Level 3', SQUEEZED),  # 0.84
     41983: ('Royal Library - L4', 'The Royal Library - Level 4', SQUEEZED),  # 0.84
     42016: ('Temple of Tranquility', 'The Temple of Tranquility', SQUEEZED),  # 0.85
+    # Item names with official English names. Items that are in the PC item table use its
+    # DT_TextPackItem name (ItemNameID_<id>); the 3DS/Definitive-exclusive items use the DQXI S
+    # name from the Yggdrasil item ID list (checked 2026-10-24). The literal 6694 draft was
+    # "Wind god shield"; the item is ふうじんの盾, "Tempest shield".
+    6694: ("Wind god shield", "Tempest shield"),
+    10241: ("Sacred bird staff", "Godbird sceptre"),
+    6758: ("Happy boots", "Elevating shoes"),
+    6649: ("Gaia armour", "Tectonic plate"),
+    10535: ("Black cat suit", "Black cat costume"),
+    10539: ("Legendary\nUniforme de\nl'Académie", "Uniforme chic de\nl'Académie"),
+    10533: ("Rubber suit", "Crimson catsuit"),
+    9615: ("Battle drum", "War drum"),
+    6795: ("Star aura", "Benevolessence"),
+    # literal drafts that differ from the PC item name (accents, article, plural)
+    10838: ("Care riviere", "Care rivière"),
+    10982: ("The Ogler's Digest", "Ogler's Digest"),
+    6351: ("Uniforme de\nl'Academie", "Uniforme de\nl'Académie"),
+    10743: ("Tiara\ntremendisima", "Tiara tremendísima"),
+    6569: ("Uber agate of\nevolution", "Über agate of\nevolution"),
+    9877: ("Uber miracle\nsword", "Über miracle sword"),
+    9879: ("Uber falcon\nblade", "Über falcon blade"),
+    10332: ("Uber\nGringham\nwhip", "Über Gringham whip"),
+    6278: ("Mini Medals", "Mini medal"),
+    9953: ("Infernal\nserpent", "Flame tang"),
+    8549: ("The Veil of Tears", "Lovers' veil"),
+    11055: ("Snaerose", "Snærose"),
 }
 
 # One occurrence of a shared string worded differently (entry.override): (source id, file,
@@ -329,7 +370,53 @@ ENTRY_FIXES: dict[tuple, str] = {
     (40478, "/ui/common_2way.pack", "blyt/win_sakusen_main_3d.bflyt", 18): "Special Rewards",
     (40478, "/ui/common_3d.pack", "blyt/win_sakusen_main_3d.bflyt", 18): "Special Rewards",
     (40478, "/ui/compactcommon.pack", "blyt/win_sakusen_main_3d.bflyt", 18): "Special Rewards",
+    # Item names whose Japanese is shared with another context: マジカルハット is also the
+    # monster Hat hamwitch, ブーメラン the "Boomerangs" weapon category, カジノコイン the casino
+    # counter; only the item.bxon name slots take the official item name
+    (5124, "/syscmn.pack", None, 421552): "Magical hat",
+    (5124, "/syscmn.pack", None, 421640): "Magical hat",
+    (5124, "/syscmn.pack", None, 421728): "Magical hat",
+    (5124, "/syscmn.pack", None, 421816): "Magical hat",
+    (8084, "/syscmn.pack", None, 310524): "Boomerang",
+    (8084, "/syscmn.pack", None, 310608): "Boomerang",
+    (8084, "/syscmn.pack", None, 310692): "Boomerang",
+    (8084, "/syscmn.pack", None, 310776): "Boomerang",
+    (8041, "/syscmn.pack", None, 257428): "Casino token",
 }
+
+
+# Replacements in every translation (source ids in FIXES excluded), rewrapped like a fix: names
+# in full, never shortened (user 2026-10-24). The PC text calls Sylvando "Sylv" in ~100 lines
+# where the Japanese has シルビア; "Sylv-" is his own slip in 29646 (シルビ……いや), kept.
+RENAMES: list[tuple[str, str]] = [
+    (r"\bSylv\b(?!-)", "Sylvando"),
+]
+
+
+def plan_renames(project, renames=RENAMES, skip=FIXES):
+    db = project.db()
+    gf = gamefont.for_project(project)
+    out, problems = [], []
+    for sid, src, cur in db.execute("SELECT id, text, translation FROM source"
+                                    " WHERE translation IS NOT NULL AND translation != ''"):
+        if sid in skip:
+            continue
+        new = cur
+        for pat, rep in renames:
+            new = re.sub(pat, rep, new)
+        if new == cur:
+            continue
+        new = gf.wrap(sid, src, new)
+        bad = validate(src, new)
+        if bad and bad != validate(src, cur):     # a problem the old text had already is kept
+            problems.append(f"{sid}: {bad}")
+            continue
+        if not gf.fits(sid, src, new):
+            lim = gf.get(sid, src)
+            problems.append(f"{sid}: does not fit {lim['width']} px x {lim['lines']} lines: {new!r}")
+            continue
+        out.append((sid, cur, new))
+    return out, problems
 
 
 def plan(project, fixes=FIXES):
@@ -405,8 +492,10 @@ def main():
     a = ap.parse_args()
     project = Project(a.workdir)
     changes, problems = plan(project)
+    renamed, rprob = plan_renames(project)
+    changes += renamed
     entries, eprob = plan_entries(project)
-    problems += eprob
+    problems += rprob + eprob
     for eid, old, new in entries:
         print(f"entry {eid}: override {old!r} -> {new!r}")
     for sid, old, new in changes:

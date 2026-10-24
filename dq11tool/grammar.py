@@ -70,6 +70,17 @@ def resolve(text: str, cap: int = 255) -> str:
         c = s[i]
         if c in ARTICLES:
             if i + 1 < len(s) and s[i + 1] == NOUN:
+                if c in (A, A_CAP):
+                    j = i + 2
+                    is_plural = False
+                    while j < len(s) and s[j] not in " \t\n\r.!?":
+                        if s[j] in (PL, GRP):
+                            is_plural = True
+                            break
+                        j += 1
+                    if is_plural:
+                        del s[i]
+                        continue
                 art = ARTICLES[c]
                 if c in (A, A_CAP) and i + 2 < len(s) and s[i + 2] in VOWELS:
                     art = art[0] + "n "

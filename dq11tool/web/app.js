@@ -17,7 +17,7 @@ async function api(path, opts = {}) {
 
 const STATUS = ["untranslated", "draft", "translated", "reviewed"];
 const state = {
-  view: "editor", filters: { category: "", status: "all", q: "", page: 1, per: 50, file: "", sort: "", show_hidden: false, pc: "" },
+  view: "editor", filters: { category: "", status: "all", q: "", page: 1, per: 50, file: "", sort: "", show_hidden: false, pc: "", scope: "all" },
   items: [], total: 0, selected: null, detail: null, categories: [], glossary: [], fonts: {}, previewFont: "3D14",
 };
 
@@ -158,7 +158,7 @@ let listSeq = 0;
 async function loadList(keepSelection = false) {
   const f = state.filters;
   const qs = new URLSearchParams({ page: f.page, per: f.per, status: f.status, q: f.q, sort: f.sort,
-    category: f.category, file: f.file, show_hidden: f.show_hidden ? "1" : "0", pc: f.pc });
+    category: f.category, file: f.file, show_hidden: f.show_hidden ? "1" : "0", pc: f.pc, scope: f.scope });
   const seq = ++listSeq;
   $("#rows").classList.add("loading");
   let r;
@@ -223,6 +223,10 @@ function renderRows() {
 }
 
 $("#search").addEventListener("input", debounce(() => { state.filters.q = $("#search").value; state.filters.page = 1; loadList(); }, 300));
+$$("#scope-filter button").forEach((b) => b.onclick = () => {
+  $$("#scope-filter button").forEach((x) => x.classList.toggle("active", x === b));
+  state.filters.scope = b.dataset.scope; state.filters.page = 1; loadList();
+});
 $$("#status-filter button").forEach((b) => b.onclick = () => {
   $$("#status-filter button").forEach((x) => x.classList.toggle("active", x === b));
   state.filters.status = b.dataset.status; state.filters.page = 1; loadList();
@@ -797,7 +801,7 @@ async function loadBuild() {
 $("#out-browse").onclick = async () => { const r = await api("/api/browse", { json: { kind: "dir" } }); if (r.path) $("#out-dir").value = r.path; };
 $("#build-btn").onclick = async () => {
   const opts = {};
-  ["make_3ds", "make_layeredfs", "make_cia", "include_drafts", "font_fixes", "latin_keyboard", "verify", "keep_update_partitions"].forEach((k) => opts[k] = $("#o-" + k).checked);
+  ["make_3ds", "make_layeredfs", "make_cia", "make_patch", "include_drafts", "font_fixes", "latin_keyboard", "verify", "keep_update_partitions"].forEach((k) => opts[k] = $("#o-" + k).checked);
   opts.expand_text_buffers = parseFloat($("#o-expand_text_buffers").value) || 1;
   $("#build-result").innerHTML = "";
   $("#build-msg").className = "msg";

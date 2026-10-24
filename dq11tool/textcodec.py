@@ -168,3 +168,26 @@ def has_japanese(text: str) -> bool:
         if 0x3040 <= o < 0x3100 or 0x4E00 <= o < 0xA000 or 0xFF66 <= o < 0xFFA0:
             return True
     return False
+
+
+# Ranges that mark Japanese on-screen text even without any kana/kanji: CJK punctuation
+# (「」、。・ー) and dashes/quotes/ellipsis (… ―). NPC/party lines that are only
+# punctuation (e.g. "「……………………。") contain no kana or kanji yet are real dialogue.
+_DISPLAY_PUNCT = ((0x2010, 0x2030), (0x3000, 0x3040))
+
+
+def is_display_text(text: str) -> bool:
+    """True if text is meant to be shown to the player, so it is worth extracting.
+
+    Includes kana/kanji (see has_japanese) but also Japanese punctuation and dashes/
+    ellipsis, so a line such as "「……………………。" is not dropped just because it has no
+    kana or kanji.
+    """
+    for ch in text:
+        o = ord(ch)
+        if 0x3040 <= o < 0x3100 or 0x4E00 <= o < 0xA000 or 0xFF66 <= o < 0xFFA0:
+            return True
+        for a, b in _DISPLAY_PUNCT:
+            if a <= o < b:
+                return True
+    return False

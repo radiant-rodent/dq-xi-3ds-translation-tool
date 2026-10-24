@@ -16,7 +16,7 @@ from .categories import EXCLUDED_BXON_TYPES, bxon_category, bxon_context
 from .ctr.formats import open_image
 from .darc import Sarc
 from .pack import Pack
-from .textcodec import decode_str, has_japanese, strip_tags
+from .textcodec import decode_str, has_japanese, is_display_text, strip_tags
 
 Progress = Callable[[str, int, int], None]
 
@@ -236,7 +236,7 @@ class Project:
             ctx = bxon_context(b.type_name, path, e.name)
             for s in b.strings:
                 t = s.text
-                if not has_japanese(t):
+                if not is_display_text(t):
                     continue
                 add(t, "bxon", path, e.name, None, s.offset, None, cat, ctx, b.type_name)
         elif magic == b"SARC":
@@ -247,7 +247,7 @@ class Project:
                     self._layout_packs.add(path)
                     lay = Bflyt(md)
                     for p in lay.text_panes():
-                        if not has_japanese(p.text):
+                        if not is_display_text(p.text):
                             continue
                         t = decode_str(p.text)
                         cat = "UI Layouts" if not is_placeholder(p.text) else "UI Placeholders"

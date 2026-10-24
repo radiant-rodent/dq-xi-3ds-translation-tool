@@ -13,7 +13,8 @@ from armsim import Sim                     # noqa: E402
 from dq11tool import namefix               # noqa: E402
 
 BUF = 0x10000100
-NAMES = ["Veronica", "Sylvando", "Hendrik", "King Irwin", "Kurucchi", "Stranger"]
+NAMES = [("ベロニカ", "Veronica"), ("シルビア", "Sylvando"), ("グレイグ", "Hendrik"), ("アーウィン", "King Irwin"),
+         ("クルッチ", "Kurucchi"), ("謎の青年", "Hooded Stranger"), ("サンポ", "High Lama")]
 
 
 def run_arm(sim, text: str, cap: int) -> str:

@@ -31,3 +31,11 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+
+# Copyrighted game assets the tool needs locally (see README)
+dq11tool/data/m7_win_p14.bcfnt
+dq11tool/data/logo_en.png
+
+# Build outputs (only the published patch in docs/patch is tracked)
+*.dq11patch
+!docs/patch/*.dq11patch

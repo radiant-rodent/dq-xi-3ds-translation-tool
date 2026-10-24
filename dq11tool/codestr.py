@@ -89,13 +89,12 @@ def find_strings(code: bytes, text_size: int | None = None) -> list[CodeString]:
     n = len(code)
     refset = references(code, text_size)
     out = []
+    spans: list[tuple[int, int]] = []
     for o in sorted(refset):
         if o & 1:
             continue
-        if o >= 2:
-            prev = struct.unpack_from("<H", code, o - 2)[0]
-            if 0x20 <= prev and code[o - 1] != 0:  # inside another UTF-16 string
-                continue
+        if any(s_start <= o < s_end for s_start, s_end in spans):
+            continue
         end = o
         while end + 1 < n and code[end:end + 2] != b"\0\0":
             end += 2
@@ -113,12 +112,13 @@ def find_strings(code: bytes, text_size: int | None = None) -> list[CodeString]:
         cap_end = (term + 3) & ~3
         if any(code[i] for i in range(term, min(cap_end, n))) or any(r in refset for r in range(o + 1, cap_end)):
             cap_end = term
+        spans.append((o, cap_end))
         out.append(CodeString(o, s, cap_end - o))
     return out
 
 
 # The padding after .text (0x72403C..0x725000) is kept for code caves, so moved strings go
-# into the .rodata padding only: 0x724040 autofit.CAVE, 0x724400 grammar.CAVE, 0x724A00-0x724BBC
+# into the .rodata padding only: 0x724040 autofit.CAVE, 0x724380 grammar.CAVE, 0x724A00-0x724BBC
 # wordwrap, test builds: 0x724C00 textlog.CAVE or testhook probes, 0x724F00 testhook
 RESERVED_TEXT_TAIL = 0x62403C
 

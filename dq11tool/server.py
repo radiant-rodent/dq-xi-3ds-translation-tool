@@ -274,8 +274,15 @@ def create_app(workdir: str) -> Flask:
             where.append("s.id NOT IN (SELECT source_id FROM pc_match)")
         q = (a.get("q") or "").strip()
         if q:
-            where.append("(s.text LIKE ? OR s.plain LIKE ? OR s.translation LIKE ? OR s.note LIKE ?)")
-            params.extend([f"%{q}%"] * 4)
+            scope = a.get("scope", "all")
+            if scope == "jp":
+                cols = ["s.text", "s.plain"]
+            elif scope == "en":
+                cols = ["s.translation", "s.note"]
+            else:
+                cols = ["s.text", "s.plain", "s.translation", "s.note"]
+            where.append("(" + " OR ".join(f"{c} LIKE ?" for c in cols) + ")")
+            params.extend([f"%{q}%"] * len(cols))
         return ("WHERE " + " AND ".join(where)) if where else "", params
 
     @app.get("/api/strings")

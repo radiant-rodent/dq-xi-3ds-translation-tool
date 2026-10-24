@@ -10,7 +10,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from . import blz, cnut, codefix, codestr, fontimport, gamefont, images
-from .bflyt import Bflyt
+from .bflyt import Bflyt, numeric_text
 from . import ietalk
 from .bxon import Bxon
 from .ctr.build import build_image, verify_image
@@ -33,7 +33,7 @@ class ExportOptions:
     # first field area).
     min_text_buffer: int = 0
     # Minimum buffer (bytes) of the text panes that are not numbers (0 = off: sstub in
-    # grammar_asm.py adds +8 units at runtime whenever 0x3A7A2C sees a {v:N} tag or party name
+    # grammar_asm.py adds +14 units at runtime whenever 0x3A7A2C sees a {v:N} tag or party name
     # code; setting 22 on every pane grew 1,103 panes in common_2way.pack by 1.58 MB of vertex
     # buffers and overflowed the UI heap when buying items in the Cobblestone shop)
     name_buffer: int = 0
@@ -41,6 +41,7 @@ class ExportOptions:
     make_3ds: bool = True
     make_layeredfs: bool = True
     make_cia: bool = False
+    make_patch: bool = False            # .dq11patch for the browser patcher (patchfile.py, docs/)
     verify: bool = True
     keep_update_partitions: bool = True
     include_script_labels: bool = False  # Squirrel string literals are lookup keys, not on-screen text
@@ -59,6 +60,9 @@ class ExportOptions:
     # layout labels wider than their text pane are drawn with narrower glyphs (font size x)
     # down to this factor, instead of running over their frame
     min_label_squeeze: float = 0.6
+    # labels at most 1 px per letter too wide: character spacing -1 instead of narrower glyphs
+    # (fractional x scales resample the glyphs: blurry on the 3DS screen)
+    crisp_labels: bool = True
     # autofit.patch: one-line labels (panes marked by the export, see FIT_EXCLUDE) are narrowed
     # at runtime, string by string, when wider than their pane, and never wrap
     runtime_fit: bool = True
@@ -185,7 +189,10 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
             font = gf._fonts().get(gf.entry_font(r))
             if real and font:
                 w = max(line_widths(r["tr"], font))
-                if w > real:
+                gaps = max(len(l) for l in r["tr"].split("\n")) - 1
+                if opts.crisp_labels and w > real and w - real <= gaps:
+                    r["crisp"] = True     # 1 px less spacing per letter: no blurry resampled glyphs
+                elif w > real:
                     r["squeeze"] = max(opts.min_label_squeeze, real / w)
     # the shared help window, widened to the widest size set on a help text
     help_factor = gf.help_factor()
@@ -203,7 +210,7 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
     if opts.grammar:
         from . import namefix
         pi = [r for rs in by_file.values() for r in rs if r.get("entry") == namefix.INIT_TABLE]
-        name_codes = namefix.assign([r["tr"] for r in pi])
+        name_codes = namefix.assign([(r["src"], r["tr"]) for r in pi])
         for r in pi:
             r["tr"] = name_codes.get(r["tr"], r["tr"])
 
@@ -234,7 +241,10 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
             layout_packs = set(project_meta(project, "layout_packs", []))
         help_packs = {p for p in files if os.path.basename(p) in MENU_PACKS} if help_factor > 1 else set()
         targets = sorted((set(by_file) - {"exefs:.code"}) | layout_packs | help_packs)
-        runtime = (runtime_names(rows), gf._fonts())
+        runtime = (runtime_names(rows), gf._fonts(), digit_gaps(project))
+        talk_level = 0
+        if opts.runtime_fit and opts.talk_wide_2d:
+            talk_level = lower_talk_level(project, rows, report)
 
         for i, path in enumerate(targets):
             progress("Applying translations", i, len(targets))
@@ -247,7 +257,7 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
                 continue
             original = romfs.read_file(rf)
             new = _patch_pack(original, by_file.get(path, []), opts, report, path,
-                              help_factor if path in help_packs else 1.0, runtime)
+                              help_factor if path in help_packs else 1.0, runtime, talk_level)
             if new is not None:
                 romfs_repl[path] = new
                 report.files_changed.append(path)
@@ -261,11 +271,18 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
         # fonts: narrow Latin glyphs (bundled DQ VII font), width fixes and composed
         # accented letters
         cache_dir = os.path.join(project.workdir, "cache")
+        keep = shown = None
         for path in files:
             if path.startswith("/font/") and path.endswith(".bffnt") and path not in overrides:
                 data = romfs.read_file(files[path])
                 name = path.rsplit("/", 1)[-1][:-6]
                 patched = fontimport.build(name, data, opts.font_fixes, cache_dir)
+                if opts.runtime_fit:
+                    # narrow Latin glyphs: what the runtime fit draws too-wide text with
+                    from . import fontnarrow
+                    if keep is None:
+                        keep, shown = _font_chars(db, rows)
+                    patched = fontnarrow.build(name, patched, keep, shown, cache_dir)
                 if patched != data:
                     romfs_repl[path] = patched
                     report.files_changed.append(path + (" (Latin font)" if name in fontimport.TARGET_FONTS
@@ -477,20 +494,95 @@ TALK_WIDE_SKIP_PACKS = ("/ui/battle_2d.pack",)
 TALK_LOWER_2D_WIDTH = 376.0       # = gamefont.MESSAGE_2D
 TALK_LOWER_2D_SHOWN = 302.0       # px on screen: from the old left edge (x -148) to x 154
 TALK_LOWER_2D = {"win_talk_lw_2d": ("txt", "txt_l", "txt_kanban_center")}
-# Other pane geometry (layout -> ({pane: width}, {pane: dx})). Skill Panel (bottom screen):
-# the description box was 120 px from x 15 (reflow_descriptions); the plate's frame starts at
-# ~150, the left column ends at ~6
+# Other pane geometry (layout -> ({pane: width}, {pane: dx}, optional {pane: (dy, dh)}, optional {pane: (font_size_y, line_space)},
+# optional {pane: squeeze}, optional {pane: {section offset: float}}, optional {pane: {section offset: byte}})).
+# Skill Panel (bottom screen): the description box was 120 px from x 15 (reflow_descriptions);
+# the plate's frame starts at ~150, the left column ends at ~6. Raised by 3 px vertically with
+# font_size_y=13.5 and line_space=0.5 so 4-line descriptions fit comfortably without touching the bottom frame.
 PANE_GEOMETRY = {
-    "common_3d_lw_skill": ({"txt_pane": 136.0}, {"txt_pane": -5.0}),
+    # Item descriptions: the 116 px text pane (3D) and the 106 px pane of the 15 px 2D font are
+    # squeezed to 0.75 and 0.6, which gives both the same room (gamefont.ITEM_DESC_PANES)
+    # (with the runtime fit the squeeze is off: narrow glyphs instead, Bflyt.narrow_fit).
+    # "Can't buy" / "Can't sell" (3D): the right-aligned price panes were clamped to 42 / 38 px
+    # and "Can't sell" was scaled past the narrowest glyphs (blurry, user 2026-10-22); 50 px
+    # reach to just after the "Buy" / "Sell" labels
+    "menu_dougu_details_2d": ({}, {}, None, None, {"txt_text": 0.6}),
+    "item_details_3d": ({"txt_buy_num": 50.0, "txt_sale_num": 50.0}, {}, None, None, {"txt_text": 0.75}),
+    "menu_dougu_details_3d": ({"txt_buy_num": 50.0, "txt_sale_num": 50.0}, {}, None, None, {"txt_text": 0.75}),
+    # 2D battle Y hint ("Check status effects" / "Check planned actions"): 90 px from x -32,
+    # nothing to its right on the bottom screen
+    "battle_2d_lw": ({"txt_state": 150.0}, {}),
+    # battle status box (lower screen): the centred 80 px name pane is as wide as the window
+    # itself, so the runtime fit let "Hooded Stranger" run over both sides of the frame (the
+    # Japanese placeholder passes it too, window_clamps leaves it); 70 px = inside the frame
+    "win_hpmp_3d": ({"txt_name": 70.0}, {}),
+    "win_hpmp_2d": ({"txt_name": 70.0}, {}),
+    # 2D party list: the 70 px names from x 21 reached under the "HP" label at x 85
+    "win_party_2d": ({f"txt_name{i}": 62.0 for i in range(1, 5)}, {}),
+    # 2D Stats: the centred 150 px title ("Boy of Cobblestone") reached over the 148 px
+    # window's frame; 138 px stay inside it
+    "win_tsuyosa1_2d": ({"txt_title": 138.0}, {}),
+    # accolade banner (3D): the title pane was drawn at scale 0.95 (blurry) and 230 px wide,
+    # over the ornaments of the 280 px frame ("The Guidance of Yggdrasil", user 2026-10-22);
+    # 1:1 and as wide as the dark inner plate, the runtime fit narrows longer titles
+    "menu_senreki_title_3d": ({"txt_title": 160.0}, {}, None, None, None, {"txt_title": {0x44: 1.0, 0x48: 1.0}}),
+    # Item List "32/41 types": three right-aligned panes placed for "999 / 999種"; the longer
+    # "  41 types" ran under the slash and the count ("327A1", user 2026-10-22). The count and
+    # slash move left, the types pane starts after the slash (left-aligned: its two leading
+    # spaces are the gap), no negative spacing
+    "common_3d_up_senreki": ({"txt_list4_r3": 72.0}, {"txt_list4_r1": -15.0, "txt_list4_r2": -17.0, "txt_list4_r3": -72.0},
+                             None, None, None, {"txt_list4_r1": {0x78: 0.0}, "txt_list4_r2": {0x78: 0.0}},
+                             {"txt_list4_r3": {0x09: 1, 0x5C: 5}}),
+    # load screen bubble: the text sat in a 100 px corner box of the 128 px bubble; as wide as
+    # the bubble's body and centred
+    "win_load_story_3d": ({"txt_story1": 112.0}, {"txt_story1": -9.0}, None, None, None, None,
+                          {"txt_story1": {0x5C: 4}}),
+    "common_3d_lw_skill": (
+        {"txt_pane": 128.0},
+        {"txt_pane": -3.0},
+        {"txt_pane": (3.0, 0.0)},
+        {"txt_pane": (13.5, 0.5)},
+    ),
     # Skill Panel tree totals ("Swordmastery: 0/ 7"): the right-aligned 96 px labels began 3 px
     # left of the window (x -152) and on its frame; 85 px keeps the right edge
     "menu_skill_get_3d": ({f"txt_{c}{k}": 85.0 for c in "lr" for k in (1, 2, 3)}, {}),
+    # Forge weapon list: 172 px window had only 70 px columns with 79 px between them, so
+    # "Greatswords" (x 98) ran over the right margin (x 165); widened to 216 px with Col 2
+    # shifted right by 24 px
+    "menu_senreki_list_buki_3d": (
+        {"win": 216.0, **{f"txt_c{k}": 86.0 for k in range(1, 6)}, **{f"txt_l{k}": 82.0 for k in range(1, 7)}},
+        {**{f"txt_c{k}": 24.0 for k in range(1, 6)}, **{f"null_txt_c{k}": 24.0 for k in range(1, 6)}},
+    ),
+    # Forge armour list: 140 px window had only 49 px for Col 2 ("Greatshields" overflowed);
+    # widened to 180 px with Col 2 shifted right by 20 px
+    "menu_senreki_list_bougu_3d": (
+        {"win": 180.0, **{f"txt_c{k}": 65.0 for k in range(1, 4)}, **{f"txt_l{k}": 68.0 for k in range(1, 6)}},
+        {**{f"txt_c{k}": 20.0 for k in range(1, 4)}, **{f"null_txt_c{k}": 20.0 for k in range(1, 4)}},
+    ),
+    # Item menu "Organise Items" button: the 96 px title centred at x 57 of the 100 px window
+    # began at x 9, under the X icon (x 10-26). Windows widened 15 px to the left (25 covered
+    # the corner of the item list frame); the title sits right of the icon
+    "win_dougu_sort_3d": (
+        {"win": 115.0, "line": 115.0, "txt_title": 85.0},
+        {"null_win_sort": -15.0, "txt_title": 13.5, "txt": 7.5},
+    ),
+    "win_dougu_sort2_3d": (                       # the one-line variant shown in the item list
+        {"win": 115.0, "txt_title": 89.0},
+        {"null_win_sort2": -15.0, "txt_title": 10.5},
+    ),
+    "win_dougu_sort3_3d": (
+        {"win": 115.0, "line": 115.0, "txt_title": 85.0},
+        {"null_win_sort3": -15.0, "txt_title": 19.5, "txt": 7.5, "icon_key_r": 15.0},
+    ),
 }
 
 
 # descriptions only: the field menu's message window does not wrap at runtime (a reflowed
 # item message ran off its right edge, 2026-10-15)
-REFLOW_FILES = ("battle_act_text.bxon", "passive_skill.bxon")
+# item.bxon: item descriptions, shown only in the item detail boxes (2D 106 px, 3D 116 px),
+# which the runtime fit narrows level by level; pre-wrapped for one width, a line too long for
+# the other box broke again and the box was scaled (blurry 2D shop text, user 2026-10-22)
+REFLOW_FILES = ("battle_act_text.bxon", "passive_skill.bxon", "item.bxon")
 
 
 def battle_reflow(r) -> str:
@@ -516,7 +608,8 @@ def is_description(r) -> bool:
     (ExportOptions.reflow_descriptions)."""
     return (r.get("entry") in REFLOW_FILES and "\n" in r["tr"]
             and not re.search(r"\{(CR|PAGE)\}", r["tr"])
-            and r["tr"].rstrip().endswith((".", "!", "?")))      # a sentence, not a two-line name
+            and (r["tr"].rstrip().endswith((".", "!", "?")) or len(r["tr"].split()) >= 6)
+            and not r["tr"].startswith(("First Trial", "Second Trial", "Third Trial", "Fourth Trial", "Final Trial")))
 
 
 # The game scrolls the text up once the lines no longer fit (font height + line space) into
@@ -618,9 +711,94 @@ FIT_EXCLUDE_PANES = ("txt_meesage1", "txt_meesage2")
 MENU_PACKS = ("common_2d.pack", "common_3d.pack", "common_2way.pack")
 
 
+def digit_gaps(project) -> dict[str, int]:
+    """Font name -> the narrowest gap (px) between two digits of that font at character
+    spacing 0: the right bearing of one digit plus the empty columns before the next."""
+    from .fontimport import Font
+    from .metrics import FontSet
+    out = {}
+    for name, data in FontSet.for_project(project).raw.items():
+        f = Font(data)
+        rights, lefts = [], []
+        for c in "0123456789":
+            gi = f.cmap.get(ord(c))
+            if gi is None:
+                continue
+            l, gw, adv = f.width(gi)
+            xs = [x for x in range(gw) if any(r[x] >= 6 for r in f.glyph(gi))]
+            if xs:
+                lefts.append(l + xs[0])
+                rights.append(adv - (l + xs[-1] + 1))
+        if rights:
+            out[name] = min(rights) + min(lefts)
+    return out
+
+
+def number_spacing(lay: Bflyt, gaps: dict[str, int]) -> None:
+    """Number panes keep the negative character spacing of the Japanese layout (-1..-3, set
+    for the wide Japanese digits); the Latin digits then touched ("131", user 2026-10-22).
+    Their spacing is raised so that two digits stay at least one pixel apart."""
+    for p in lay.text_panes():
+        if not (0 <= p.font_index < len(lay.fonts)) or not numeric_text(p.text):
+            continue
+        gap = gaps.get(lay.fonts[p.font_index].rsplit(".", 1)[0])
+        cs = struct.unpack_from("<f", lay.data, p.sec_offset + 0x78)[0]
+        # (2D14SH: < 0, its outline rings overlap on purpose)
+        if gap is not None and gap >= 0 and cs < 0 and gap + cs < 1:
+            lay.set_float.setdefault(p.name, {})[0x78] = float(min(0, 1 - gap))
+
+
+def halfwidth_labels(lay: Bflyt) -> dict[int, str]:
+    """Pane texts made of full-width Latin letters, digits and punctuation only ("ＨＰ", "ＭＰ",
+    "ＨＰ：" - not extracted as Japanese), written in ASCII. The fonts draw a full-width letter
+    with a space in front (fontimport: monster suffixes "Slime Ａ"), so "ＭＰ" ran over its
+    30 px pane and wrapped into "M" / "P" (user 2026-10-22)."""
+    out = {}
+    for p in lay.text_panes():
+        t = p.text
+        if t and any(0xFF21 <= ord(c) <= 0xFF5A for c in t) and all(0xFF01 <= ord(c) <= 0xFF5E for c in t):
+            out[p.index] = encode_str("".join(chr(ord(c) - 0xFEE0) for c in t))
+    return out
+
+
+def _font_chars(db, rows) -> tuple[set[int], set[int]]:
+    """(every character of the Japanese text and the translations, the characters of the
+    strings the exported game shows) for fontnarrow.build."""
+    keep: set[int] = set()
+    for text, tr in db.execute("SELECT text, translation FROM source"):
+        keep.update(map(ord, text))
+        keep.update(map(ord, tr or ""))
+    shown: set[int] = set()
+    done = {r["sid"] for r in rows}
+    for r in rows:
+        shown.update(map(ord, r["tr"]))
+    for sid, text in db.execute("SELECT id, text FROM source"):
+        if sid not in done:
+            shown.update(map(ord, text))
+    return keep, shown
+
+
+def lower_talk_level(project, rows: list, report: ExportReport) -> int:
+    """Narrow glyph level of the lower-screen 2D talk window (TALK_LOWER_2D): the lowest at
+    which every dialogue line (wrapped for TALK_LOWER_2D_WIDTH) fits TALK_LOWER_2D_SHOWN px."""
+    from . import fontnarrow
+    from .metrics import FontSet, line_widths
+    font_set = FontSet.for_project(project)
+    data, font = font_set.raw["2D14"], font_set.fonts["2D14"]
+    lines = [ln for r in rows if r["kind"] == "bxon" and r["category"] in gamefont.DIALOGUE_CATEGORIES
+             for ln in r["tr"].replace("{PAGE}", "\n").split("\n")]
+    level, over = fontnarrow.level_for(lines, lambda ln: line_widths(ln, font)[0],
+                                       fontnarrow.savings(data), TALK_LOWER_2D_SHOWN)
+    for ln in over[:20]:
+        report.warnings.append({"entry": None, "text": ln[:60],
+                                "problem": "too wide for the lower-screen 2D talk window"})
+    return level
+
+
 def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: ExportReport,
-                path: str = "", help_factor: float = 1.0, runtime=None) -> bytes | None:
-    """help_factor > 1: widen the help window layouts (gamefont.HELP_LAYOUTS) in this pack."""
+                path: str = "", help_factor: float = 1.0, runtime=None, talk_level: int = 0) -> bytes | None:
+    """help_factor > 1: widen the help window layouts (gamefont.HELP_LAYOUTS) in this pack.
+    talk_level: narrow glyph level of the lower-screen 2D talk window (0: x scale instead)."""
     pack = Pack.parse(original)
     help_members = {f"blyt/{n}.bflyt" for n in gamefont.HELP_LAYOUTS} if help_factor > 1 else set()
     by_entry: dict[str, list] = defaultdict(list)
@@ -656,6 +834,7 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
             members: dict[str, dict[int, str]] = defaultdict(dict)
             widen: dict[str, dict[int, float]] = defaultdict(dict)
             squeeze: dict[str, dict[int, float]] = defaultdict(dict)
+            crisp: dict[str, set[int]] = defaultdict(set)
             for r in erows:
                 if r["kind"] == "bflyt":
                     members[r["member"]][r["loc"]] = encode_str(r["tr"])
@@ -663,6 +842,8 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
                         widen[r["member"]][r["loc"]] = r["pane_scale"]
                     if r["squeeze"] < 1:
                         squeeze[r["member"]][r["loc"]] = r["squeeze"]
+                    if r.get("crisp"):
+                        crisp[r["member"]].add(r["loc"])
             mrepl = {}
             for n in sarc.nodes:
                 md = sarc.raw[sarc.data_offset + n.start:sarc.data_offset + n.end]
@@ -692,6 +873,18 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
                 if geo:
                     lay.set_width.update(geo[0])
                     lay.move_x.update(geo[1])
+                    if len(geo) > 2 and geo[2]:
+                        lay.move.update(geo[2])
+                    if len(geo) > 3 and geo[3]:
+                        lay.text_style.update(geo[3])
+                    if len(geo) > 4 and geo[4]:
+                        lay.squeeze_names.update(geo[4])
+                    if len(geo) > 5 and geo[5]:
+                        for pn, vals in geo[5].items():
+                            lay.set_float.setdefault(pn, {}).update(vals)
+                    if len(geo) > 6 and geo[6]:
+                        for pn, vals in geo[6].items():
+                            lay.set_byte.setdefault(pn, {}).update(vals)
                 if mapl:
                     lay.set_float.update(mapl[1])
                     lay.set_byte.update(mapl[2])
@@ -699,7 +892,11 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
                 if fit:
                     lay.mark_fit = set(FIT_EXCLUDE_PANES)
                     lay.mark_multi = opts.runtime_fit_multi
+                    lay.narrow_fit = True
                 lay.squeeze = squeeze.get(n.name, {})
+                lay.crisp = crisp.get(n.name, set())
+                if runtime is not None and len(runtime) > 2:
+                    number_spacing(lay, runtime[2])
                 if rt:
                     runtime_fit(lay, base, runtime[0], runtime[1], squeeze=not opts.runtime_fit)
                     lay.move_x.update(RUNTIME_MOVE_X.get(base, {}))
@@ -717,8 +914,19 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
                     if wide and base in TALK_LOWER_2D:
                         k = TALK_LOWER_2D_SHOWN / TALK_LOWER_2D_WIDTH
                         for p in lay.text_panes():
-                            if p.name in wide:
-                                lay.set_width[p.name] = TALK_LOWER_2D_WIDTH
+                            if p.name not in wide:
+                                continue
+                            lay.set_width[p.name] = TALK_LOWER_2D_WIDTH
+                            if talk_level:
+                                # full-size narrow glyphs (autofit "fl<level>") instead of a
+                                # 0.8 x scale, which drew the text blurred; the pane is as
+                                # wide as the top window's, so the lines break the same way.
+                                # Left-aligned text keeps its left edge, centred text its centre
+                                left = lay.data[p.sec_offset + 0x5C] & 3 == 1
+                                lay.set_byte[p.name] = dict(zip(range(0x24, 0x27), b"fl" + str(talk_level).encode()))
+                                lay.move_x[p.name] = ((TALK_LOWER_2D_WIDTH if left else TALK_LOWER_2D_SHOWN)
+                                                      - p.width) / 2
+                            else:
                                 lay.set_float.setdefault(p.name, {})[0x44] = k
                                 lay.move_x[p.name] = (TALK_LOWER_2D_SHOWN - p.width) / 2
                     elif wide:
@@ -733,6 +941,7 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
                 wd = dict(widen.get(n.name, {}))
                 if is_help:
                     wd.update(lay.widen_window(help_factor))
+                texts = {**halfwidth_labels(lay), **texts}
                 nd = lay.rebuild(texts, buf_factor=mfactor if expand else 1.0,
                                  buf_min=max(opts.min_text_buffer if expand else 0, opts.name_buffer),
                                  widen=wd)
@@ -790,6 +999,13 @@ def run_export(project: Project, out_dir: str, opts: ExportOptions, progress=Non
                 fp.write(code_out)   # Luma expects the decompressed code
         report.outputs["layeredfs"] = lroot
         progress("Writing LayeredFS patch", 1, 1)
+
+    if opts.make_patch:
+        from .patchfile import write_patch
+        outp = os.path.join(out_dir, f"{base}_EN.dq11patch")
+        write_patch(project.rom_path, outp, romfs_repl, exefs_repl, "Dragon Quest XI (3DS) English",
+                    time.strftime("%Y-%m-%d"), opts.keep_update_partitions, progress)
+        report.outputs["patch"] = outp
 
     if opts.make_cia and report.outputs.get("3ds"):
         from .ctr.cia import build_cia

@@ -22,10 +22,11 @@ from __future__ import annotations
 BASE = 0x100000
 CAVE = 0x724200            # free .text tail between autofit (0x724040-0x7241FC) and grammar
 TABLE = 0x724320
-TABLE_END = 0x724400       # grammar_code.CAVE
+TABLE_END = 0x724380       # grammar_code.CAVE (the table needs ~55 bytes; the grammar code outgrew 0x724A00-0x724400)
 CODE_BASE = 0xE010
 MAX_NAMES = 16
 MAX_UNITS = 6              # the save's name field without its NUL
+MAX_NAME = 15              # grammar_asm's sstub grows a pane by 14 units per name code ("Hooded Stranger")
 INIT_TABLE = "player_initialize.bxon"
 
 SOURCE = r"""
@@ -131,23 +132,42 @@ def assemble() -> bytes:
     return bytes(ks.asm(SOURCE.replace("TABLEADDR", f"{TABLE:#x}"), CAVE)[0])
 
 
-def assign(names: list[str]) -> dict[str, str]:
-    """{long name: its code character} for the names that do not fit the save, numbered in
-    sorted order (tests can derive the same codes from the names)."""
-    long = sorted({n for n in names if len(n) > MAX_UNITS and n.isascii()})[:MAX_NAMES]
-    return {n: chr(CODE_BASE + k) for k, n in enumerate(long)}
+# A save stores the code, so a code must keep meaning the same character from one patch to the
+# next: these are the codes of the first release (its English names in sorted order: Hendrik,
+# King Irwin, Kurucchi, Stranger, Sylvando, Veronica), by Japanese name; new long names follow.
+FIXED = ("グレイグ", "アーウィン", "クルッチ", "謎の青年", "シルビア", "ベロニカ")
+
+
+def assign(names: list[tuple[str, str]]) -> dict[str, str]:
+    """{long name: its code character} for the (Japanese, English) names that do not fit the
+    save: FIXED ones keep their code, the others are numbered after them in sorted order."""
+    long = {(jp, en) for jp, en in names if len(en) > MAX_UNITS and en.isascii()}
+    codes = {en: chr(CODE_BASE + FIXED.index(jp)) for jp, en in long if jp in FIXED}
+    k = len(FIXED)
+    for en in sorted({en for _, en in long} - set(codes)):
+        codes[en] = chr(CODE_BASE + k)
+        k += 1
+    if k > MAX_NAMES:
+        raise ValueError(f"{k} party name codes > {MAX_NAMES}")
+    return codes
 
 
 def project_codes(db) -> dict[str, str]:
-    """assign() over the translated names of INIT_TABLE, as the exporter sees them."""
-    rows = db.execute("SELECT DISTINCT COALESCE(NULLIF(e.override, ''), s.translation) FROM entry e"
+    """assign() over the names of INIT_TABLE, as the exporter sees them."""
+    rows = db.execute("SELECT DISTINCT s.text, COALESCE(NULLIF(e.override, ''), s.translation) FROM entry e"
                       " JOIN source s ON s.id = e.source_id WHERE e.entry = ? AND s.translation IS NOT NULL"
                       " AND s.translation != ''", (INIT_TABLE,)).fetchall()
-    return assign([r[0] for r in rows])
+    return assign([(r[0], r[1]) for r in rows])
 
 
 def table(codes: dict[str, str]) -> bytes:
-    data = b"".join(n.encode("ascii") + b"\0" for n in sorted(codes, key=lambda n: codes[n]))
+    """The names in code order; a code without a name (a FIXED name now short) gets an empty
+    entry, which `names` leaves as it is."""
+    too_long = [n for n in codes if len(n) > MAX_NAME]
+    if too_long:
+        raise ValueError(f"party names longer than {MAX_NAME}: {too_long}")
+    by_code = {ord(c) - CODE_BASE: n for n, c in codes.items()}
+    data = b"".join(by_code.get(k, "").encode("ascii") + b"\0" for k in range(max(by_code, default=-1) + 1))
     if len(data) > TABLE_END - TABLE:
         raise ValueError(f"name table {len(data)} bytes > {TABLE_END - TABLE}")
     return data

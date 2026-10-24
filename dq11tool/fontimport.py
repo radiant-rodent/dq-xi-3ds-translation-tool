@@ -344,7 +344,8 @@ def import_glyphs(target: bytes, donor: bytes, fullwidth: bool = True,
 
 
 def _rewrite(target: bytes, t: Font, glyphs: dict, cell: tuple, lift: int,
-             zero_kerning: bool = True) -> tuple[bytes, int, int]:
+             zero_kerning: bool = True, reuse: dict | None = None,
+             drop: set | frozenset = frozenset()) -> tuple[bytes, int, int]:
     """Font `target` with new/replaced glyphs.
 
     glyphs: code -> (rows, (left, glyph width, advance)); rows are pixel rows (0..15) in the
@@ -352,12 +353,18 @@ def _rewrite(target: bytes, t: Font, glyphs: dict, cell: tuple, lift: int,
     cell:   new (cell w, cell h, columns, rows) of the glyph sheet.
     lift:   existing glyphs move down by this many rows (and the baseline with them), which
             makes room above them, e.g. for accents on capitals.
+    reuse:  new code -> index of an existing glyph whose cell it takes over (its old character
+            must be in `drop`); other new codes get cells after the last glyph.
+    drop:   codes removed from the character map (scan and table blocks only).
     Returns (data, replaced, added)."""
     cw, ch, cols, rows = cell
+    reuse = reuse or {}
     new_codes = sorted(c for c in glyphs if c not in t.cmap)
-    gi_new = {c: t.glyph_count + i for i, c in enumerate(new_codes)}
+    appended = [c for c in new_codes if c not in reuse]
+    gi_new = {c: t.glyph_count + i for i, c in enumerate(appended)}
+    gi_new.update({c: reuse[c] for c in new_codes if c in reuse})
     by_gi = {gi_new.get(c, t.cmap.get(c)): v for c, v in glyphs.items()}
-    count = t.glyph_count + len(new_codes)
+    count = t.glyph_count + len(appended)
     if count > cols * rows * t.nsheets:
         raise ValueError("not enough room on the glyph sheet")
 
@@ -386,6 +393,11 @@ def _rewrite(target: bytes, t: Font, glyphs: dict, cell: tuple, lift: int,
     # ---- character map: replaced codes keep their index; new codes go into the scan block
     blocks = [CmapBlock(b.start, b.end, b.method, b.offset, list(b.table), dict(b.scan))
               for b in t.cmap_blocks]
+    for b in blocks:
+        for c in drop:
+            b.scan.pop(c, None)
+            if b.method == 1 and b.start <= c <= b.end:
+                b.table[c - b.start] = 0xFFFF
     scan_block = next((b for b in blocks if b.method == 2), None)
     for c in new_codes:
         for b in blocks:
@@ -490,14 +502,43 @@ DONOR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", DO
 _donor: bytes | None = None
 
 
+DONOR_ARC = "/LAYOUT/system_font14__.arc"   # in Dragon Quest VII (EU) RomFS, member font/<DONOR_NAME>.bcfnt
+DONOR_SHA256 = "40a0e4d3886b46f5793f7ce5623cc21ae6ab3401185de8452944269f8489edd3"
+
+
 def donor() -> bytes:
-    """The Latin font shipped with the tool (from Dragon Quest VII (EU),
-    RomFS:/LAYOUT/system_font14__.arc -> font/m7_win_p14.bcfnt)."""
+    """The Latin font from Dragon Quest VII (EU) (not distributed with the tool: extract it from
+    your own dump with `python -m dq11tool.fontimport DQVII.3ds`)."""
     global _donor
     if _donor is None:
+        if not os.path.isfile(DONOR_FILE):
+            raise FileNotFoundError(
+                f"{DONOR_FILE} is missing: extract it from your Dragon Quest VII (Europe) dump with "
+                "`python -m dq11tool.fontimport <DQVII.3ds>`")
         with open(DONOR_FILE, "rb") as fp:
             _donor = fp.read()
     return _donor
+
+
+def extract_donor(rom_path: str) -> str:
+    """Copy the donor font out of a decrypted Dragon Quest VII (EU) .3ds into DONOR_FILE."""
+    from .ctr.formats import open_image
+    from .darc import darc_files
+    f, _ncsd, ncch = open_image(rom_path)
+    try:
+        romfs = ncch.romfs()
+        arc = next((rf for rf in romfs.files if rf.path == DONOR_ARC), None)
+        if arc is None:
+            raise ValueError(f"{rom_path} has no {DONOR_ARC} (not Dragon Quest VII (EU)?)")
+        data = dict(darc_files(romfs.read_file(arc))).get(f"font/{DONOR_NAME}.bcfnt")
+    finally:
+        f.close()
+    if data is None or hashlib.sha256(data).hexdigest() != DONOR_SHA256:
+        raise ValueError("unexpected font data (different release of Dragon Quest VII?)")
+    os.makedirs(os.path.dirname(DONOR_FILE), exist_ok=True)
+    with open(DONOR_FILE, "wb") as fp:
+        fp.write(data)
+    return DONOR_FILE
 
 
 BLANK_CODES = tuple(range(0xE000, 0xE00B))   # textcodec grammar markers, {noun}, {grp}: drawn as nothing
@@ -544,3 +585,10 @@ def build(name: str, data: bytes, font_fixes: bool = True, cache_dir: str | None
         with open(cp, "wb") as fp:
             fp.write(out)
     return out
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 2:
+        sys.exit("usage: python -m dq11tool.fontimport <Dragon Quest VII (Europe) decrypted .3ds>")
+    print("wrote", extract_donor(sys.argv[1]))

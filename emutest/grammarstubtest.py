@@ -73,9 +73,9 @@ def main():
     sim.call(labels["estub"], sp=SP)
     check(f"estub resolves ({text(sim)!r})", text(sim) == want and length(sim) == len(want)
           and sim.r[0] == 5 and sim.r[13] == SP and sim.r[1:4] == [0x301, 0x302, 0x303])
-    # sstub: slack per marker (+2 units) and per {v:N} / party name code (+8 units)
-    for tpl, slack in (("{The}{v:2} attacks {the}{v:3}{pl}!", 22), ("Hero attacks!", 0),
-                       ("{a}{v:5}", 10), ("\ue010", 8)):
+    # sstub: slack per marker (+2 units) and per {v:N} / party name code (+14 units)
+    for tpl, slack in (("{The}{v:2} attacks {the}{v:3}{pl}!", 34), ("Hero attacks!", 0),
+                       ("{a}{v:5}", 16), ("\ue010", 14)):
         raw = encode_str(tpl).encode("utf-16-le") + b"\0\0"
         o = TPL - sim.mem_base
         sim.mem[o:o + len(raw)] = raw

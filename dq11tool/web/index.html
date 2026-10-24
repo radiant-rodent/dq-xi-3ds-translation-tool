@@ -49,6 +49,11 @@
 <main id="view-editor" class="view editor hidden">
   <aside class="sidebar">
     <input id="search" type="search" placeholder="Search Japanese, English, notes…">
+    <div class="seg" id="scope-filter" title="Restrict the search box to Japanese or English text">
+      <button data-scope="all" class="active">All text</button>
+      <button data-scope="jp">Japanese</button>
+      <button data-scope="en">English</button>
+    </div>
     <div class="seg" id="status-filter">
       <button data-status="all" class="active">All</button>
       <button data-status="todo">To do</button>
@@ -174,6 +179,7 @@
         <label class="check"><input type="checkbox" id="o-make_3ds" checked> <b>.3ds image</b> – for emulators (Citra, Azahar, Lime3DS…) and flashcarts</label>
         <label class="check"><input type="checkbox" id="o-make_layeredfs" checked> <b>Luma3DS LayeredFS patch</b> – copy to the SD card of a modded 3DS and play from your cartridge or installed copy</label>
         <label class="check"><input type="checkbox" id="o-make_cia"> <b>.cia</b> – installable with FBI on a modded 3DS (replaces an installed copy)</label>
+        <label class="check"><input type="checkbox" id="o-make_patch"> <b>Browser patch</b> (<code>.dq11patch</code>) – for the web patcher in <code>docs/</code>: players patch their own dump into a .3ds or .cia, no game data shipped</label>
       </div>
       <div>
         <h3>Options</h3>

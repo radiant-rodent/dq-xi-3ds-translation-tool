@@ -38,13 +38,12 @@ loop:
     cmp r10, #4
     beq plural
     cmp r10, #5
-    beq number
+    cmpne r10, #10
+    beq number                  @ {n:one|more} / {s:one|more} (chosen by the plural flag)
     cmp r10, #8
     beq noun
     cmp r10, #9
     beq group
-    cmp r10, #10
-    beq number                  @ {s:one|more}: same block, chosen by the plural flag
 next:
     add r7, r7, #1
     b loop
@@ -62,6 +61,26 @@ article:
     mov r11, #0                 @ +8: "an " / "An " instead of "a " / "A "
     cmp r10, #2
     blo art_put
+    add r1, r7, #2
+art_scan:
+    cmp r1, r6
+    bge art_vowel
+    add r0, r4, r1, lsl #1
+    ldrh r0, [r0]
+    cmp r0, #0x20
+    cmpne r0, #0x0A
+    cmpne r0, #0x0D
+    cmpne r0, #0x2E
+    cmpne r0, #0x21
+    cmpne r0, #0x3F
+    beq art_vowel
+    sub r2, r0, r8
+    cmp r2, #4
+    cmpne r2, #9
+    beq drop1
+    add r1, r1, #1
+    b art_scan
+art_vowel:
     add r0, r7, #2
     cmp r0, r6
     bge art_put
@@ -414,21 +433,30 @@ def assemble(base: int) -> bytes:
 #   right after the real pass (0x3A7AB4, r4 = pane: `ldrb r0, [r4, #0x44]` -> `bl estub`).
 # - Its measuring pass sizes the pane buffer (vt+0x58 -> 0x53F258, reallocates only when
 #   length + 1 > capacity): 0x3A7A90 `uxth r1, r0` -> `bl sstub` adds 2 units per article /
-#   plural marker in the template (r6 = template, r8 = its length), so "the " fits, plus 8
+#   plural marker in the template (r6 = template, r8 = its length), so "the " fits, plus 14
 #   units per {v:N} tag (0x0004) or literal party name code (0xE010..0xE01F) that namefix
-#   expands after the text is built (not unconditionally on every pane: +16 chars * 312 B =
-#   5 KB per pane exhausted the UI layout heap when buying items in the Cobblestone shop).
+#   expands after the text is built (namefix.MAX_NAME: "Hooded Stranger" is 15 units, one of
+#   them the code; not unconditionally on every pane: +16 chars * 312 B = 5 KB per pane
+#   exhausted the UI layout heap when buying items in the Cobblestone shop).
 # - Both pane SetString functions (0x53F940: NUL-terminated text, 0x53F9EC: text with a length)
 #   end with the text and its NUL in the pane's buffer ([pane + 0xA4], capacity [+0xCC] units,
 #   length [+0xCE]; r4 = pane): `ldrb r0, [r4, #0xd0]` -> `bl stub`, which resolves texts set
 #   directly (names, labels) unless the caller (saved lr) is the template walker 0x3A7594.
+# - Message windows (talk, battle) type their text out: 0x614CF0 builds the full message
+#   ({v:N} expanded) into a 256-unit buffer at obj+0x202 (r7 = obj+0x402 = its end), then
+#   0x615058 copies it one character per frame into obj+0x002 and sets that growing prefix on
+#   the pane. The prefix of "{s:is|are}" has no closing marker yet, so the pane showed "is"
+#   until the "}" was typed and then flipped to "are" (user report 2026-10-24). 0x615028
+#   `strh r0, [r4]` (the full message's NUL) -> `bl wstub` resolves the full message once, so
+#   only finished English text is typed out (the pane pass then finds nothing left to do).
 # pane_fix (r4 = pane) holds the only `bl gfix` (textlog.patch redirects it to its logger) and
 # stores the new length; before it, `bl names` (namefix.py, installed with this patch) puts the
 # long party names in. gfix is idempotent: text set again every frame costs one scan.
 HOOKS = ((0x53F9D8, "d000d4e5", "stub"), (0x53FA74, "d000d4e5", "stub"),
-         (0x3A7AB4, "4400d4e5", "estub"), (0x3A7A90, "7010ffe6", "sstub"))
+         (0x3A7AB4, "4400d4e5", "estub"), (0x3A7A90, "7010ffe6", "sstub"),
+         (0x615028, "b000c4e1", "wstub"))
 WALKER, WALKER_END = 0x3A7594, 0x3A7A2C
-CAVE = 0x724400
+CAVE = 0x724380
 STUB = r"""
 stub:
     push {r0-r3, ip, lr}
@@ -462,16 +490,16 @@ ss_loop:
     bhs ss_done
     add r3, r6, r2, lsl #1
     ldrh r3, [r3]
-    cmp r3, #4                  @ {v:N} variable tag (0x0004, var_id): +8 units if it holds a name code
-    addeq r1, r1, #4
+    cmp r3, #4                  @ {v:N} variable tag (0x0004, var_id): +14 units if it holds a name code
+    addeq r1, r1, #7
     addeq r2, r2, #2
     beq ss_loop
     sub r3, r3, #0xE000
     cmp r3, #4                  @ {the} {The} {a} {A} {pl}: +2 units
     addls r1, r1, #1
     sub r3, r3, #0x10
-    cmp r3, #15                 @ 0xE010..0xE01F literal party name code: +8 units
-    addls r1, r1, #4
+    cmp r3, #15                 @ 0xE010..0xE01F literal party name code: +14 units
+    addls r1, r1, #7
     add r2, r2, #1
     b ss_loop
 ss_done:
@@ -508,6 +536,12 @@ walker:
     .word WALKADDR
 walker_len:
     .word WALKLEN
+
+wstub:                          @ end of 0x614CF0: r7 = end of the full message buffer
+    strh r0, [r4]               @ the replaced instruction (its NUL)
+    sub r0, r7, #0x200          @ obj + 0x202, 256 units
+    mov r1, #0x100
+    b gfix                      @ returns to 0x61502C; r0-r3/ip are free there
 """
 
 

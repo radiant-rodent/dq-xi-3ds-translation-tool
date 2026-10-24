@@ -177,6 +177,40 @@ def restyle_pill(rgba: np.ndarray, text: str, font: Font, level: int = 0, cap_px
     return out.clip(0, 255).round().astype(np.uint8)
 
 
+def restyle_badge(rgba: np.ndarray, text: str, font: Font, cap_px: float = 8.0) -> np.ndarray:
+    """A party member initial badge (equipment UI indicator): circular blue background
+    with an orange letter outlined in black."""
+    circle_mask = rgba[:, :, 3] > 50
+    bg = np.zeros_like(rgba)
+    bg[circle_mask, :3] = [85, 102, 136]
+    bg[:, :, 3] = rgba[:, :, 3]
+
+    m = _mask(font, text, bold=1, level=FONT_LEVEL)
+    top, bottom = _cap_rows(font, level=FONT_LEVEL)
+    cap = bottom - top + 1
+    m = _resize(m, cap_px / cap)
+    cols = np.where(m.max(0) > 0.3)[0]
+    rows = np.where(m.max(1) > 0.3)[0]
+    m = m[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
+    edge = _dilate(m)
+
+    mh, mw = m.shape
+    y0 = 8 - mh // 2
+    x0 = 16 - mw // 2
+
+    out = bg.copy()
+    for dy in range(edge.shape[0]):
+        for dx in range(edge.shape[1]):
+            if edge[dy, dx] > 0.2:
+                out[y0 + dy, x0 + dx, :3] = [0, 0, 0]
+    for dy in range(mh):
+        for dx in range(mw):
+            v = m[dy, dx]
+            if v > 0.2:
+                out[y0 + dy, x0 + dx, :3] = (np.array([255, 187, 51]) * v + out[y0 + dy, x0 + dx, :3] * (1 - v)).astype(np.uint8)
+    return out
+
+
 def _resize(m: np.ndarray, scale: float) -> np.ndarray:
     from PIL import Image
     im = Image.fromarray((m * 255).astype(np.uint8))
@@ -285,6 +319,16 @@ TEXTURE_LABELS = {
     "timg/icon_quest_order.bflim": ("Underway", "pill", {"cap_px": 8, "pad_right": 5}),
     "timg/icon_quest_clear.bflim": ("Cleared", "pill", {"cap_px": 8, "pad_right": 5}),
     "timg/icon_quest_achievementtga.bflim": ("Achieved", "pill", {"cap_px": 8, "pad_right": 5}),
+    "timg/kaji2_txt1.bflim": ("Primed!", "label", {"align": "center", "cap_px": 14}),
+    # Equipment UI party member equipped badges: Hero, Erik, Veronica, Serena, Sylvando, Rab, Jade, Hendrik
+    "timg/icon_charaE_pc1.bflim": ("H", "badge", {}),
+    "timg/icon_charaE_pc2.bflim": ("E", "badge", {}),
+    "timg/icon_charaE_pc3.bflim": ("V", "badge", {}),
+    "timg/icon_charaE_pc4.bflim": ("S", "badge", {}),
+    "timg/icon_charaE_pc5.bflim": ("S", "badge", {}),
+    "timg/icon_charaE_pc6.bflim": ("R", "badge", {}),
+    "timg/icon_charaE_pc7.bflim": ("J", "badge", {}),
+    "timg/icon_charaE_pc8.bflim": ("H", "badge", {}),
 }
 # Texture atlases: a label made of pieces of the image (from the layout's pic panes: texture
 # coordinates; a piece with k is shown turned by 90 degrees k times), joined left to right into
@@ -297,29 +341,57 @@ ATLAS_LABELS = {
         ([(32, 16, 128, 32, 0)], 17, "Swap map"),                        # 地図切り替え (40490)
         ([(64, 96, 128, 112, 0), (0, 16, 16, 112, 1)], 17, "Show/Hide Objective"),   # 40679
     ],
+    "timg/skill_up_panel_3d.bflim": [
+        ([(384, 0, 512, 16, 0)], 0, "Pep Power Learned!", {"align": "center", "cap_px": 9}),
+        ([(384, 16, 512, 32, 0)], 0, "Pep Power!", {"align": "center", "cap_px": 9}),
+    ],
+    "timg/kaji2_txt2.bflim": [
+        ([(0, 0, 194, 38, 0)], 0, "Perfection!", {"align": "center", "cap_px": 16}),
+        ([(0, 48, 136, 86, 0)], 0, "Success!", {"align": "center", "cap_px": 16}),
+        ([(0, 88, 138, 128, 0)], 0, "Failure!", {"align": "center", "cap_px": 16}),
+    ],
+    "timg/kaji2_power_txt.bflim": [
+        ([(0, 0, 32, 42, 1)], 0, "Temp.", {"align": "center", "cap_px": 14}),
+    ],
+    "timg/skill_txt_atari.bflim": [
+        ([(0, 0, 32, 32, 0)], 0, "H", {"align": "center", "cap_px": 18}),
+        ([(32, 0, 64, 32, 0)], 0, "I", {"align": "center", "cap_px": 18}),
+        ([(64, 0, 96, 32, 0)], 0, "T", {"align": "center", "cap_px": 18}),
+        ([(96, 0, 128, 32, 0)], 0, "!", {"align": "center", "cap_px": 18}),
+    ],
 }
 PACKS = {"common_2d.pack", "common_2way.pack", "common_3d.pack", "record_3d.pack", "title.pack",
-         "dive_dugeon_2way.pack"}
+         "dive_dugeon_2way.pack", "panel_3d.pack", "smith_3d.pack", "equip_3d.pack"}
 
 
 def redraw_atlas(bflim: bytes, labels: list, font: Font) -> bytes:
     px = texture.decode(bflim).copy()
-    for pieces, icon, text in labels:
+    for item in labels:
+        if len(item) == 4:
+            pieces, icon, text, opt = item
+        else:
+            pieces, icon, text = item
+            opt = {}
+        align = opt.get("align", "left")
+        margin = opt.get("margin", 1)
+        cap_px = opt.get("cap_px", 9)
         strip = np.concatenate([np.rot90(px[y0:y1, x0:x1], k) for x0, y0, x1, y1, k in pieces], 1)
         strip = np.ascontiguousarray(strip)
-        strip[:, icon:] = restyle(strip[:, icon:], text, font, "left", margin=1, level=FONT_LEVEL, cap_px=9)
+        strip[:, icon:] = restyle(strip[:, icon:], text, font, align, margin=margin, level=FONT_LEVEL, cap_px=cap_px)
         x = 0
         for x0, y0, x1, y1, k in pieces:
             w = (x1 - x0) if k % 2 == 0 else (y1 - y0)
             px[y0:y1, x0:x1] = np.rot90(strip[:, x:x + w], -k)
             x += w
-    return texture.encode(px, bflim)
+    return _encode(px, bflim)
 
 
 def redraw(bflim: bytes, text: str, kind: str, font: Font, **opt) -> bytes:
     px = texture.decode(bflim)
     if kind == "pill":
         new = restyle_pill(px, text, font, level=FONT_LEVEL, **opt)
+    elif kind == "badge":
+        new = restyle_badge(px, text, font, **opt)
     else:
         new = restyle(px, text, font, level=FONT_LEVEL, **opt)
     return _encode(new, bflim)

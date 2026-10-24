@@ -77,6 +77,15 @@ NAME_WRAP = 112     # names still break into two lines at the label's real width
 # Layout labels may be up to 1/LABEL_SQUEEZE times their pane width: the exporter narrows
 # their glyphs to fit (never below export.ExportOptions.min_label_squeeze).
 LABEL_SQUEEZE = 0.8
+# Item descriptions (three lines) are drawn in the item windows' text panes: 116 px at font size
+# 13 (3D) and 106 px at font size 15 (2D). export.PANE_GEOMETRY squeezes those panes' glyphs to
+# the factors below, so a line may be as wide as the squeezed pane: (pane px, font size x, squeeze).
+ITEM_DESC_PANES = {"3d": (116.0, 13.0, 0.75), "2d": (106.0, 15.0, 0.6)}
+
+
+def item_description_width(font) -> int:
+    """Widest line of an item description in the source font's pixels: the tighter of the two panes."""
+    return int(min(w * font.width / size / sq for w, size, sq in ITEM_DESC_PANES.values()))
 # tables whose strings the game also puts into layout panes that show the same text: a string
 # with layout occurrences is measured by its panes only
 LABEL_TABLES = {"ui_text.bxon"}
@@ -305,6 +314,13 @@ class GameFonts:
             self._labels = {k for k, v in ok.items() if v and k in has_layout}
         return sid in self._labels
 
+    def _item_descriptions(self) -> set[int]:
+        """Strings of the item table: their three-line descriptions go into the squeezed item panes."""
+        if getattr(self, "_itemdesc", None) is None:
+            self._itemdesc = {r[0] for r in self.project.db().execute(
+                "SELECT DISTINCT source_id FROM entry WHERE entry = 'item.bxon'")}
+        return self._itemdesc
+
     def get(self, sid: int, source: str) -> dict:
         box = self._box(sid)
         lim = dict(box.get(sid, source), auto_width=None, auto_lines=None)
@@ -313,6 +329,8 @@ class GameFonts:
         cw, cl = self.custom_box(sid)
         if not cw and self.label_only(sid):
             width = int(width / LABEL_SQUEEZE)
+        if lines == 3 and not cw and sid in self._item_descriptions():
+            width = item_description_width(font)     # squeezed pane, see ITEM_DESC_PANES
         help = sid in self.help_texts()
         if help:
             # one window for all help texts: the widest size set on any of them; no more lines

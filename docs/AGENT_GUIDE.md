@@ -447,11 +447,14 @@ Free `.text` tail after 0x724040 (codestr's moved strings now go to the `.rodata
 | address | user |
 |---|---|
 | 0x724040-0x7241FC | `autofit.py` (runtime fit of layout text) |
-| 0x724200 / 0x724320-0x7243FF | `namefix.py` (party name codes; its name table, written by the export) |
+| 0x724200 / 0x724320-0x72437F | `namefix.py` (party name codes; its name table, written by the export) |
 | 0x724400 | `grammar_code.py` (battle grammar pass) |
 | 0x724A00-0x724BBC | `wordwrap.py` (writer + line measurer hooks, shared measure) |
+| 0x7249E0-0x724A00 | `autofit` BITMAP (characters with narrow glyphs, `fontnarrow.CHARS`) |
+| 0x724BBC-0x724BF0 | `autofit.SCALE_CODE` (scale fallback past the last narrow level) |
 | 0x724C00-0x724F00 | `textlog.py` (test builds) and the debug probes |
-| 0x724F00 | `testhook.py` (test input, test builds) |
+| 0x724F00-0x724F98 | `testhook.py` (test input, test builds) |
+| 0x724F98-0x725000 | `autofit.REMAP_CODE` (string -> narrow glyph level, in place) |
 
 `emutest/autofittest.py` checks that `autofit.CODE` matches its source and that the caves do
 not overlap. `codefix.py` holds the small fixes: `INSTRUCTIONS` (single instructions, checked
@@ -462,6 +465,24 @@ against the original bytes), `patch_name_table` / `patch_save_code` (below), inl
   scaled down until the wrapped text fits). The exporter (`Bflyt.window_clamps`) first shortens
   panes that reach over their window frame or the next text on their row, so the fit keeps
   them apart. The static per-pane squeezes are off when the fit is on.
+- **Narrow glyphs instead of squeezing** (user 2026-10-22: squeezed text was blurry, worst on
+  the 2D pixel fonts): `fontnarrow.py` adds 4 condensed copies (0.9/0.8/0.7/0.6) of the Latin
+  letters to every font, built on the pixel grid (column carving, 2D14SH: core carved, outline
+  redrawn), at U+E100 + level*0x100 + c, in cells of kanji no string uses. Letters keep their left
+  bearing (left-aligned lists start at one x), digits/symbols only lose spacing, arms/serifs
+  (f, r, 4) are protected from carving. The runtime fit
+  remaps a too-wide string to the first level that fits (scales only past level 4); panes it
+  handles get no static squeeze and no negative character spacing (`Bflyt.narrow_fit`). The
+  lower 2D talk window uses a fixed level ("fl3", `export.lower_talk_level`). Multi-line
+  measuring must use a copy of the writer (CalcStringRect moves the pen: text drawn 2 lines
+  low). Verified runs narrow_shop2d/3d_b, narrow_bat2d, narrow_menu2d_c, narrow_lwtalk.
+- **Crisp labels** (user 2026-10-20: scaled text looks blurry on a real 3DS, any fractional x
+  scale resamples the glyphs): a label at most 1 px per letter too wide gets character spacing
+  -1 instead of narrower glyphs, both at runtime (`autofit.CRISP_SOURCE`, jumped to from the
+  "fit" path) and in the export (`ExportOptions.crisp_labels`, `Bflyt.crisp` sets txt1+0x78).
+  Wider overflows still scale. A/B: `--opt crisp_labels=False` (static part only).
+- **Skill Panel descriptions**: 127 official texts were too long for the 4-line, 128 px box;
+  the user approved shortened versions close to the official wording (status 1, 2026-10-20).
 - **Save Code** (priest "Save Code", title "Save Code"): the hero's name is encoded with the
   256-entry table at 0x72EFBE; Latin characters were missing, so the priest showed only "「".
   The keyboard's characters now fill the unused and katakana entries, and the 64-character
@@ -551,14 +572,20 @@ against the original bytes), `patch_name_table` / `patch_save_code` (below), inl
 - **Party names** (`namefix.py`): the save keeps each member's name in 14 bytes (6 UTF-16
   units + NUL, member record +2), copied from `syscmn.pack:player_initialize.bxon` at a new
   game. "Veronica" / "Sylvando" had been cut to "Veroni" / "Sylv.", "Hendrik" (7) ran into the
-  next field ("Hendrik$"). The export writes a longer name as one character U+E010+k (sorted
-  order, `namefix.assign`) and the names into a table at 0x724320; `names` (0x724200, called
-  by the grammar stub's pane_fix before gfix) puts them back into every pane text. Room for
-  them: `ExportOptions.name_buffer` (22-byte minimum for non-numeric text panes; the game sizes
-  label buffers from the layout) and 16 units of slack in sstub (messages built from
-  templates). `emutest/namefixtest.py` checks the ARM code against `namefix.resolve`.
-  Saves started with an older build keep their stored short names. Test with stored names:
-  `scenario.py ... --members 1,2,3,4 --rename "Veroni=Veronica,Sylv.=Sylvando,Hendrik=Hendrik"`.
+  next field ("Hendrik$"). The export writes a longer name as one character U+E010+k
+  (`namefix.assign`) and the names into a table at 0x724320; `names` (0x724200, called
+  by the grammar stub's pane_fix before gfix) puts them back into every pane text. The save
+  stores the code, so codes must never change meaning: `namefix.FIXED` keeps the first
+  release's codes by Japanese name (Hendrik, King Irwin, Kurucchi, Hooded Stranger, Sylvando,
+  Veronica), new long names (High Lama) are numbered after them. Room for them: 14 units of
+  slack per {v:N} / name code in sstub (`namefix.MAX_NAME` = 15, "Hooded Stranger"); the
+  battle status name panes are clamped inside their frame (`export.PANE_GEOMETRY`
+  win_hpmp_*). `emutest/namefixtest.py` checks the ARM code against `namefix.resolve`,
+  `emutest/grammarstubtest.py` the slack.
+  Saves started with an older build keep their stored short names; the save editor's
+  Overview → Party names → "Restore full names" (or `SaveEditor.exe --restore-names in out`)
+  writes the codes. Test with stored names (only the hero joins scenario battles):
+  `scenario.py battle ... --rename "Hero=Hooded Stranger"`.
 - **Descriptions** (`ExportOptions.reflow_descriptions`, `export.REFLOW_FILES`): skill / spell
   descriptions (battle_act_text, passive_skill) are written without line breaks; the runtime
   word wrap breaks them for each box (battle help, Magic menu help, Skill Panel box widened to

@@ -13,7 +13,7 @@ from armsim import Sim                                  # noqa: E402
 from dq11tool import grammar, grammar_asm                # noqa: E402
 from dq11tool.textcodec import GRAMMAR, N_END, N_MID, N_START, S_START, encode_str  # noqa: E402
 
-BASE = 0x724400
+BASE = 0x724380
 BUF = 0x10000100
 
 
@@ -44,6 +44,8 @@ CASES = [
     ("{n:point|points} 1", 256),
     ("{The}{noun}Slime{pl}{grp} {s:is|are} defeated.", 256),
     ("{The}{noun}Slime {s:is|are} defeated.", 256),
+    ("{A}{noun}Slime{pl}{grp} {s:appears|appear}!", 256),
+    ("{A}{noun}Slime {s:appears|appear}!", 256),
     ("{The}{noun}Dracky{pl}{grp} {s:takes|take} 1 {n:point|points}.", 256),
     ("{n:one|more} and 21", 256),
     ("broken {n:x|y", 256),

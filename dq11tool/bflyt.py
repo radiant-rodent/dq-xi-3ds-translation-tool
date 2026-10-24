@@ -31,6 +31,7 @@ _NUMERIC = set("0123456789０１２３４５６７８９+-－＋×x%％.．,，:
 # multi-line box, autofit.MARKER_MULTI) than the pane
 FIT_MARKER = b"fit"
 FIT_MARKER_MULTI = b"fim"
+FIT_MARKER_LEVEL = b"fl"    # + level digit: always drawn with that level of narrow glyphs
 WINDOW_MARGIN = 7.0     # px between a window pane's edge and its text (frame + padding)
 NEIGHBOUR_GAP = 5.0     # px between a label and the next text on its row
 JP_TOLERANCE = 4.0      # px the Japanese placeholder text may pass a limit and it still counts
@@ -56,9 +57,14 @@ def box_holds(sec) -> bool:
     return h > 0 and fy > 0 and n * fy + (n - 1) * ls <= h + JP_TOLERANCE
 
 
+# Panes whose placeholder is a number/price ("999999G") but which display English text at
+# runtime ("Can't buy", "Can't sell"): their buffer must grow and their pane receives fit
+TEXT_STATUS_PANES = {"txt_buy_num", "txt_sale_num"}
+
+
 def numeric_text(text: str) -> bool:
     t = text.strip()
-    return not t or all(ch in _NUMERIC for ch in t) or len(t) <= 1
+    return not t or all(ch in _NUMERIC for ch in t)
 
 
 @dataclass
@@ -106,12 +112,14 @@ class Bflyt:
         # longer English label into its pane without moving or widening anything
         self.squeeze: dict[int, float] = {}
         self.squeeze_names: dict[str, float] = {}       # the same by pane name
+        self.crisp: set[int] = set()                    # text section index: character spacing -1 instead
         self.runtime_overflow: dict[str, float] = {}    # px still too wide at the minimum squeeze (report only)
         self.width_to: dict[str, float] = {}            # pane name -> new width (px)
         # runtime fit (autofit.py): None = off, else pane names to leave out; every other
         # one-line text pane gets the user data FIT_MARKER, a box FIT_MARKER_MULTI
         self.mark_fit: set[str] | None = None
         self.mark_multi = True
+        self.narrow_fit = False     # the runtime fit switches to narrow glyphs: no static squeeze there
 
     def _fonts(self) -> list[str]:
         for m, off, sz in self.sections:
@@ -179,18 +187,14 @@ class Bflyt:
         for i, (m, off, sz) in enumerate(self.sections):
             sec = bytearray(d[off:off + sz])
             if m == b"txt1":
-                grow = not numeric_text(self._pane_text(sec))
                 pname = sec[0x0C:0x24].split(b"\0", 1)[0].decode("ascii", "replace")
+                grow = not numeric_text(self._pane_text(sec)) or pname in TEXT_STATUS_PANES
                 if grow and self.grow_only is not None:
                     grow = pname in self.grow_only
                 bmin = buf_min if grow else 0
                 if pname in self.min_buf:
                     bmin = max(bmin, self.min_buf[pname])
                 sec = self._rebuild_txt1(sec, new_texts.get(i), buf_factor if grow else 1.0, bmin)
-                sq = min(self.squeeze.get(i, 1.0), self.squeeze_names.get(pname, 1.0))
-                if sq < 1.0:
-                    fx = struct.unpack_from("<f", sec, 0x70)[0]
-                    struct.pack_into("<f", sec, 0x70, fx * sq)
                 if pname in self.width_to:
                     struct.pack_into("<f", sec, 0x4C, max(self.width_to[pname],
                                                          struct.unpack_from("<f", sec, 0x4C)[0]))
@@ -201,7 +205,7 @@ class Bflyt:
                 # number panes ("27", "308"): the runtime fit never narrows text without letters,
                 # so a clamped number wrapped instead (2D battle "MP 30 / 8", user 2026-10-17)
                 if (self.mark_fit is not None and pname not in self.mark_fit and not any(sec[0x24:0x2C])
-                        and not numeric_text(self._pane_text(d[off:off + sz]))):
+                        and (not numeric_text(self._pane_text(d[off:off + sz])) or pname in TEXT_STATUS_PANES)):
                     if one_line(sec):
                         sec[0x24:0x2C] = FIT_MARKER.ljust(8, b"\0")
                         if i in clamp and widen.get(i, 1) <= 1 and pname not in self.width_to:
@@ -211,6 +215,22 @@ class Bflyt:
                                 struct.pack_into("<f", sec, 0x2C, struct.unpack_from("<f", sec, 0x2C)[0] + dx)
                     elif self.mark_multi and box_holds(d[off:off + sz]):
                         sec[0x24:0x2C] = FIT_MARKER_MULTI.ljust(8, b"\0")
+            if m == b"txt1":
+                # a pane the runtime fit narrows (with narrow glyphs, autofit.py) keeps its font
+                # size: a static squeeze is a fractional x scale, drawn blurry
+                sq = min(self.squeeze.get(i, 1.0), self.squeeze_names.get(pname, 1.0))
+                narrowed = self.narrow_fit and bytes(sec[0x24:0x26]) == FIT_MARKER[:2]
+                if narrowed:
+                    sq = 1.0
+                    # negative character spacing (set for the Japanese glyphs) would eat the one
+                    # empty column the narrow glyphs keep between letters ("NoShops")
+                    if struct.unpack_from("<f", sec, 0x78)[0] < 0:
+                        struct.pack_into("<f", sec, 0x78, 0.0)
+                if i in self.crisp and sq >= 1.0 and not narrowed:
+                    struct.pack_into("<f", sec, 0x78, struct.unpack_from("<f", sec, 0x78)[0] - 1.0)
+                if sq < 1.0:
+                    fx = struct.unpack_from("<f", sec, 0x70)[0]
+                    struct.pack_into("<f", sec, 0x70, fx * sq)
             if m in PANES and (self.move or self.move_x or self.set_width or self.set_float or self.set_byte):
                 mname = sec[0x0C:0x24].split(b"\0", 1)[0].decode("ascii", "replace")
                 if mname in self.move:
