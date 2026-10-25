@@ -39,3 +39,6 @@ dq11tool/data/logo_en.png
 # Build outputs (only the published patch in docs/patch is tracked)
 *.dq11patch
 !docs/patch/*.dq11patch
+
+# local notes for coding agents (not published)
+CLAUDE.md
