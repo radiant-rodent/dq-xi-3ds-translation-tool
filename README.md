@@ -26,19 +26,50 @@ It works in any current desktop browser (Chrome, Edge, Firefox, Safari): the pag
 static HTML and JavaScript, and the patched image is assembled from your file and handed
 to you as a normal download.
 
-## What the translation changes
+## What the mod changes
 
-Besides the text itself, the game needed engine-level work to fit English:
+### The text
 
-* runtime word wrap at spaces for message, battle and help text (the game only breaks
-  Japanese text at fixed points);
-* articles and plurals resolved in game for monster and item names (“a Slime”,
-  “3 Slimes”, “the Slime”);
-* narrower Latin glyphs (taken from the European *Dragon Quest VII*) and per-label
-  runtime fitting so long English labels no longer overflow their frames;
-* a Latin name-entry keyboard with accented letters, Latin Save Codes, English map labels,
-  texture text redrawn in English and the official English title logo;
-* more memory for the UI layout heap (English layouts need more vertex buffers).
+* **Everything a player reads is in English**: story dialogue and cutscenes, NPC talk,
+  party chat, menus, battle messages, items, equipment, spells and abilities, monster
+  names, quests, tutorials, books, the bestiary, accolades and the Tickington
+  "Adventure Log" worlds.
+* **The official English wording wherever it exists.** Lines the 3DS shares with the
+  official English *Dragon Quest XI S* (PC) use that translation word for word, including
+  its character, place, monster and item names and its British spelling. Text that only
+  the 3DS has (the 2D mode, 3DS-only monsters, items and menus) is translated in the same
+  style, using official names where other localisations established them.
+* **Full names everywhere.** The save only has room for 6-character names, so long names
+  ("Veronica", "Sylvando", "Hooded Stranger") are stored as short codes that the game
+  expands when it draws them. Old saves with cut names keep working.
+* **Proper English grammar in battle.** The game builds battle lines from templates; the
+  mod resolves articles and plurals after the names and numbers are filled in ("The slime
+  takes 1 point of damage!", "The slimes are defeated.", "A group of drackies appears!").
+
+### Engine and layout changes
+
+* **Word wrap at spaces.** The game breaks Japanese text anywhere. Text it assembles at
+  runtime (battle messages, descriptions) now breaks between words, with balanced lines in
+  the centred battle captions.
+* **Crisp text that fits its frame.** Labels and boxes too small for the English are
+  narrowed string by string at runtime, using condensed copies of the Latin letters carved
+  on the pixel grid (four levels per font). Text is only scaled, which blurs it, when even
+  the narrowest level does not fit. The narrow Latin font comes from the European
+  *Dragon Quest VII*, with accented letters added.
+* **Longer NPC lines** continue in extra message boxes instead of being cut off.
+* **Windows resized for English**: the 2D message windows, the battle command window,
+  the enemy list, the per-character action labels on the lower screen (one column per
+  party member) and other panes whose Japanese size was too small.
+* **More memory** for the UI layout heap and the main heap (English layouts need more
+  vertex buffers, and the English NPC files are larger). Without it the item and shop
+  menus crashed.
+* **Images and names in English**: textures with Japanese text (town banners, map hints,
+  quest badges, the 3D map) are redrawn, field map labels use the official place names,
+  and the title screen shows the official English logo.
+* **Name entry and Save Codes**: a Latin keyboard with accented letters for naming the
+  hero, and Save Codes that use Latin letters and work with Latin names.
+* **Small fixes in the game code**: no Japanese quotation marks around dialogue, ASCII
+  colons and punctuation in labels, and the monster count shown as a plain number.
 
 The game code patches only use ARMv6K / VFPv2 instructions, so they run on real Old 3DS
 and 2DS hardware, not just emulators.

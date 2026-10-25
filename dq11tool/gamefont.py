@@ -14,6 +14,7 @@ to the next, and the extra line pushes the message out of its box; user report 2
 from __future__ import annotations
 
 import os
+import re
 import threading
 
 from . import boxfit
@@ -393,8 +394,26 @@ class GameFonts:
                                                        line_widths(" ".join(words[i:]), font)[0]))
         return " ".join(words[:best]) + "\n" + " ".join(words[best:])
 
+    def _battle_texts(self) -> set[int]:
+        """Strings of battle_Text.bxon (battle messages, reflowed by export.battle_reflow)."""
+        if getattr(self, "_battle", None) is None:
+            self._battle = {r[0] for r in self.project.db().execute(
+                "SELECT DISTINCT source_id FROM entry WHERE entry = 'battle_Text.bxon'")}
+        return self._battle
+
     def wrap(self, sid: int, source: str, translation: str) -> str:
         """Line breaks for the window(s) the string is shown in."""
+        if sid in self._battle_texts() and "{PAGE}" not in translation:
+            # every sentence on lines of its own: the export keeps only the breaks after a
+            # sentence (export.battle_reflow), so a break wrapped across two sentences was
+            # joined and the runtime wrap re-broke the message mid-sentence ("...gains 6
+            # experience / points! 6 gold received!", user 2026-10-25)
+            parts = re.split(r"(?<=[.!?…)'\"]) *\n *", translation)
+            if len(parts) > 1:
+                return "\n".join(self._wrap(sid, source, p) for p in parts)
+        return self._wrap(sid, source, translation)
+
+    def _wrap(self, sid: int, source: str, translation: str) -> str:
         lim = self.get(sid, source)
         if self.name_field(sid) and lim["lines"] == 2:
             return self._wrap_name(sid, translation, lim["width"])

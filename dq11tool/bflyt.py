@@ -115,6 +115,7 @@ class Bflyt:
         self.crisp: set[int] = set()                    # text section index: character spacing -1 instead
         self.runtime_overflow: dict[str, float] = {}    # px still too wide at the minimum squeeze (report only)
         self.width_to: dict[str, float] = {}            # pane name -> new width (px)
+        self.width_exact: dict[str, float] = {}         # pane name -> width, also narrower (px)
         # runtime fit (autofit.py): None = off, else pane names to leave out; every other
         # one-line text pane gets the user data FIT_MARKER, a box FIT_MARKER_MULTI
         self.mark_fit: set[str] | None = None
@@ -198,6 +199,8 @@ class Bflyt:
                 if pname in self.width_to:
                     struct.pack_into("<f", sec, 0x4C, max(self.width_to[pname],
                                                          struct.unpack_from("<f", sec, 0x4C)[0]))
+                if pname in self.width_exact:
+                    struct.pack_into("<f", sec, 0x4C, self.width_exact[pname])
                 if pname in self.text_style:
                     fy, ls = self.text_style[pname]
                     struct.pack_into("<f", sec, 0x74, fy)
@@ -208,7 +211,8 @@ class Bflyt:
                         and (not numeric_text(self._pane_text(d[off:off + sz])) or pname in TEXT_STATUS_PANES)):
                     if one_line(sec):
                         sec[0x24:0x2C] = FIT_MARKER.ljust(8, b"\0")
-                        if i in clamp and widen.get(i, 1) <= 1 and pname not in self.width_to:
+                        if (i in clamp and widen.get(i, 1) <= 1 and pname not in self.width_to
+                                and pname not in self.width_exact):
                             cw, dx = clamp[i]
                             struct.pack_into("<f", sec, 0x4C, cw)
                             if dx:

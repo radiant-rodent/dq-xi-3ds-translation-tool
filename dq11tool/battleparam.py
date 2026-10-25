@@ -25,6 +25,12 @@ REC = 64
 ENEMY_REC = 44
 TEST_ENTRY = 25          # LoadScenarioBattleEncount(25): Heliodor arena, Skelegon + Chasmonaut
 ZONE_AT = 0x26
+# Record 25 is an arena fight: the hero alone (arena records 25-31, 40-48 differ from story
+# battles in the settings block +0x20..+0x3F and have an extra array at +0x18). free_party
+# copies the settings of a normal story battle (FREE_PARTY_FROM) so the save's line-up fights
+FREE_PARTY_FROM = 5
+SETTINGS = (0x20, 0x40)
+EXTRA_AT = 0x18
 
 
 def _array(d: bytes, at: int) -> tuple[int, int]:
@@ -46,8 +52,10 @@ def read(d: bytes, k: int) -> dict:
             "zone": struct.unpack_from("<H", d, o + ZONE_AT)[0], "raw": d[o:o + REC]}
 
 
-def write(d: bytes, k: int, monsters: list[tuple[int, int]], zone: int | None = None) -> bytes:
-    """Record k with monsters [(enemy id, count)] (and battle zone)."""
+def write(d: bytes, k: int, monsters: list[tuple[int, int]], zone: int | None = None,
+          free_party: bool = False) -> bytes:
+    """Record k with monsters [(enemy id, count)] (and battle zone; free_party: the save's
+    whole party fights, see FREE_PARTY_FROM)."""
     out = bytearray(d)
     n, base = records(d)
     if not 0 <= k < n:
@@ -60,6 +68,12 @@ def write(d: bytes, k: int, monsters: list[tuple[int, int]], zone: int | None = 
     for eid, count in monsters:
         out += struct.pack("<HBB", eid, 0, count)
     struct.pack_into("<II", out, o, len(monsters), at - (o + 4))
+    if free_party:
+        keep = struct.unpack_from("<H", out, o + ZONE_AT)[0]
+        src = base + REC * FREE_PARTY_FROM
+        out[o + SETTINGS[0]:o + SETTINGS[1]] = d[src + SETTINGS[0]:src + SETTINGS[1]]
+        struct.pack_into("<H", out, o + ZONE_AT, keep)
+        struct.pack_into("<I", out, o + EXTRA_AT, 0)
     if zone is not None:
         struct.pack_into("<H", out, o + ZONE_AT, zone)
     return bytes(out)
@@ -115,12 +129,12 @@ def parse_party(names: dict, spec: str) -> list[tuple[int, int]]:
 
 
 def patch_pack(pack_bytes: bytes, monsters: list[tuple[int, int]], zone: int | None = None,
-               entry: int = TEST_ENTRY) -> bytes:
+               entry: int = TEST_ENTRY, free_party: bool = False) -> bytes:
     """gamecmn.pack with scenario battle `entry` replaced."""
     from .pack import Pack
     p = Pack.parse(pack_bytes)
     for e in p.entries:
         if e.name == MEMBER:
-            e.data = write(e.data, entry, monsters, zone)
+            e.data = write(e.data, entry, monsters, zone, free_party)
             return p.build()
     raise ValueError(f"{MEMBER} not in pack")

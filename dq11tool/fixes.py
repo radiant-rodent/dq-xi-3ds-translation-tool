@@ -40,6 +40,47 @@ FIXES: dict[int, tuple] = {
     37: ("{The}{v:2} is defeated.", "{The}{v:2} {s:is|are} defeated."),
     57: ("{The}{v:2} is defeated.", "{The}{v:2} {s:is|are} defeated."),
     359: ("{The}{v:3} is defeated.", "{The}{v:3} {s:is|are} defeated."),
+    # battle reward: one sentence per line like the Japanese (name / exp / gold). The old
+    # 3D-width wrap "experience\npoints! ..." is joined by battle_reflow (no sentence end) and
+    # the runtime wrap balanced it as "...gains 6 experience / points! 6 gold received!"
+    # (user 2026-10-25: "breaks early"); the DB went back to it several times (old backups)
+    55: (None, "{The}{v:2} gains {v:8} experience points!\n{v:9} gold received!"),
+    # battle captions of two sentences whose Japanese has one per line: the wrapped break sat
+    # inside the second sentence, the export joined it and the runtime wrap broke the joined
+    # line mid-sentence ("But nothing happens! The hero puts / the herb away.", 2026-10-25).
+    # One sentence per line where each fits the 2D battle box (338 px); the long "pepped up"
+    # lines stay one sentence pair (only "their" -> "Their"). 234/1240/1499/1634: "their" was
+    # a broken "itself" / "themselves" replacement
+    147: ('{The}{v:2} becomes pepped up! their strength\nincreases!', '{The}{v:2} becomes pepped up!\nTheir strength increases!'),
+    234: ('{The}{v:2} creates a doppelganger of their!', '{The}{v:2} creates a doppelganger!'),
+    458: ("{The}{v:2}'s parry chance rises! They brace for\nattacks.", "{The}{v:2}'s parry chance rises!\nThey brace for attacks."),
+    643: ('{The}{v:2} becomes pepped up! their strength,\nresilience and critical hit chance increase!', '{The}{v:2} becomes pepped up! Their strength, resilience and critical hit chance increase!'),
+    648: ('{The}{v:2} becomes pepped up! their strength,\ndeftness and chance of evading attacks\nincrease!', '{The}{v:2} becomes pepped up! Their strength, deftness and chance of evading attacks increase!'),
+    653: ('{The}{v:2} becomes pepped up! their resilience,\nmagical might and critical spell chance increase!', '{The}{v:2} becomes pepped up! Their resilience, magical might and critical spell chance increase!'),
+    658: ('{The}{v:2} becomes pepped up! their resilience,\nmagical mending and critical spell chance\nincrease!', '{The}{v:2} becomes pepped up! Their resilience, magical mending and critical spell chance increase!'),
+    663: ('{The}{v:2} becomes pepped up! their strength,\ncharm and chance of evading attacks increase!', '{The}{v:2} becomes pepped up! Their strength, charm and chance of evading attacks increase!'),
+    668: ('{The}{v:2} becomes pepped up! their magical\nmight, magical mending and critical spell chance\nincrease!', '{The}{v:2} becomes pepped up! Their magical might, magical mending and critical spell chance increase!'),
+    673: ('{The}{v:2} becomes pepped up! their resilience,\nagility and critical hit chance increase!', '{The}{v:2} becomes pepped up! Their resilience, agility and critical hit chance increase!'),
+    1217: ('{The}{v:2} becomes pepped up! their agility,\ncharm and critical hit chance increase!', '{The}{v:2} becomes pepped up! Their agility, charm and critical hit chance increase!'),
+    1240: ('Miss! The ominous aura surrounding {the}{v:2}\nprotects their!', 'Miss! The dark barrier around {the}{v:2} blocks all damage!'),
+    1269: ('Earned EXP and gold increased! Treasure drop\nguaranteed!', 'Earned EXP and gold increased!\nTreasure drop guaranteed!'),
+    1318: ('What a combo from {the}{v:2}! It and its\nhornet make Multithrusts!', 'What a combo from {the}{v:2}!\nIt and its hornet make Multithrusts!'),
+    1365: ('{The}{v:2} counter attacks! {The}{v:3}\ntakes {v:8} points of damage!', '{The}{v:2} counter attacks!\n{The}{v:3} takes {v:8} points of damage!'),
+    1434: ("{The}{v:2}'s {v:5}! It activates the power\nof the stone sacrifice!", "{The}{v:2}'s {v:5}!\nIt activates the power of the stone sacrifice!"),
+    1456: ("{The}{v:2} unleashes the orb's power! Blue\nShock!", "{The}{v:2} unleashes the orb's power!\nBlue Shock!"),
+    1478: ("{The}{v:2}'s {v:5}! It comes crashing\ndown from above!", "{The}{v:2}'s {v:5}!\nIt comes crashing down from above!"),
+    1499: ('{The}{v:2} creates doppelgangers of their!', '{The}{v:2} creates doppelgangers!'),
+    1544: ('{The}{v:2} leaps high into the sky! A dazzling\nspinning kick!', '{The}{v:2} leaps high into the sky!\nA dazzling spinning kick!'),
+    1612: ('{The}{v:2} holds {the}{v:5} aloft! Light\npours forth from its tip!', '{The}{v:2} holds {the}{v:5} aloft!\nLight pours forth from its tip!'),
+    1618: ('But nothing happens! {The}{v:2} puts\n{the}{v:5} away.', 'But nothing happens!\n{The}{v:2} puts {the}{v:5} away.'),
+    1634: ("{The}{v:2} tries to create doppelgangers of\ntheir! But their doesn't have enough MP!", "{The}{v:2} tries to create doppelgangers!\nBut {the}{v:2} doesn't have enough MP!"),
+    1768: ('Veronica releases all her magic power! Serena\nreleases all her magic power!', 'Veronica releases all her magic power!\nSerena releases all her magic power!'),
+    1945: ("Hatchoo! That was a weird sneeze and you can't\nmove!", "Hatchoo!\nThat was a weird sneeze and you can't move!"),
+    1989: ("The Lord of Shadows' last onslaught! Mordragon\njumps into the fray too!", "The Lord of Shadows' last onslaught!\nMordragon jumps into the fray too!"),
+    1992: ("{The}{v:2} and co.'s wounds are healed! HP and\nMP now recover little by little!", "{The}{v:2} and co.'s wounds are healed!\nHP and MP now recover little by little!"),
+    2046: ('{The}{v:2} scatters the Sands of Time! Time\nrewinds!', '{The}{v:2} scatters the Sands of Time!\nTime rewinds!'),
+    2079: ('But nothing left to steal! Already rinsed for all\ntheir goodies!', 'But nothing left to steal!\nAlready rinsed for all their goodies!'),
+    2123: ('{The}{v:2} counter attacks! {The}{v:3}\ntakes {v:8} points of damage!', '{The}{v:2} counter attacks!\n{The}{v:3} takes {v:8} points of damage!'),
     # the name of a mixed monster group ({v:2} of the battle lines). Official PC:
     # Battle_Result_Monster_Yaxtutuketa_3 "The group of enemies are defeated!" (British plural)
     11547: ("Monster Pack", "{noun}Group of enemies{grp}"),

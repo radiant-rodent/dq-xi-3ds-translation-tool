@@ -87,7 +87,8 @@ def event_steps(a) -> list:
     members = [int(m) for m in filter(None, (a.members or "").split(","))]
     for m in members:
         steps.append(("PartyAdd", m))
-    for member in range(1 + len(members)):
+    lineup = [x for x in (a.lineup or "").split(",") if x.strip()]
+    for member in range(max(1 + len(members), len(lineup))):
         for param, amount in PARTY[a.party].items():
             steps.append(("AddPlayerParam", member, param, amount))
     if a.party != "asis" or a.members:
@@ -145,7 +146,7 @@ def build(a, steps):
         names, _ = monsters_table()
         party = battleparam.parse_party(names, a.enemies)
         zone = int(a.zone, 0) if a.zone else None
-        patches[battleparam.PACK] = lambda d: battleparam.patch_pack(d, party, zone)
+        patches[battleparam.PACK] = lambda d: battleparam.patch_pack(d, party, zone, free_party=bool(a.lineup))
         a.monsters = [(names.get(e, ("?", "?"))[1] or names.get(e, ("?", "?"))[0], c) for e, c in party]
     if a.kind == "shop":            # the shopkeeper's record is the NPC's: every record becomes shop --id
         from dq11tool import shopparam
@@ -208,9 +209,28 @@ def rename_members(d: bytearray, spec: str) -> int:
     return n
 
 
-def make_save(mode: str, gold: int | None = None, rename: str = ""):
+# party line-up: record numbers in order (0xFF ends), their count, and the "joined" global flag
+# of each member (records 1-7 -> flags 325-331, record 27 -> 332; save editor, 2026-10-24).
+# PartyAdd from the event does nothing this early in the story; all three are needed.
+LINEUP_AT, LINEUP_SLOTS, PARTY_COUNT_AT, GLOBAL_FLAGS_AT = 0x3E04, 31, 0x6580, 0x6870
+RECORD, TACTICS_AT, FOLLOW_ORDERS = 0x200, 0x1C, 5     # character record: tactics byte
+
+
+def set_lineup(d: bytearray, spec: str) -> None:
+    """--lineup "0,1,2,3": the party (character record numbers, hero = 0) in battle order."""
+    recs = [int(x) for x in spec.split(",") if x.strip()]
+    d[LINEUP_AT:LINEUP_AT + LINEUP_SLOTS] = bytes(recs) + b"\xff" * (LINEUP_SLOTS - len(recs))
+    struct.pack_into("<I", d, PARTY_COUNT_AT, len(recs))
+    for r in recs:
+        d[r * RECORD + TACTICS_AT] = FOLLOW_ORDERS    # commanded by the player, not by the AI
+        if 1 <= r <= 7 or r == 27:
+            d[GLOBAL_FLAGS_AT + (332 if r == 27 else 324 + r)] = 1
+
+
+def make_save(mode: str, gold: int | None = None, rename: str = "", lineup: str = ""):
     """The run's save: a copy of the mode's base save (checked: its mode byte matches),
-    optionally with more gold (there is no script call that adds gold) and renamed members."""
+    optionally with more gold (there is no script call that adds gold), renamed members and
+    another party line-up."""
     import roomscan
     dst = os.path.join(az.SAVES, RUN_SAVE)
     if os.path.isdir(dst):
@@ -226,7 +246,9 @@ def make_save(mode: str, gold: int | None = None, rename: str = ""):
         d[0x6A7F:0x6A84] = b"\0" * 5    # clear Draconian Quest flags (0x6A80 = No Shopping in user_citra)
     if rename:
         print("renamed", rename_members(d, rename), "stored names")
-    if gold is not None or rename:
+    if lineup:
+        set_lineup(d, lineup)
+    if gold is not None or rename or lineup:
         open(p, "wb").write(roomscan.fix_crc(d))
 
 
@@ -350,7 +372,7 @@ def run(a) -> int:
         # inn: the priest charges 999 G; 5000 G or more on load earns the "Gold Magnet"
         # accolade (a popup at spawn), so stay below
         gold = a.gold if a.gold is not None else (4999 if a.kind == "inn" else None)
-        make_save(a.mode, gold, a.rename)
+        make_save(a.mode, gold, a.rename, a.lineup)
         meta["gold"] = gold if gold is not None else "save (57)"
         if os.path.exists(azctl.STATE) and _alive():
             azctl.main(["stop"])
@@ -435,6 +457,7 @@ def parser():
     ap.add_argument("--inputs", default=None, help="override the inputs after the talk")
     ap.add_argument("--pre", default="", help="inputs before the talk (2D: Y,wait:2 swaps the screens)")
     ap.add_argument("--gold", type=int, default=None, help="gold in the save (inn: 4999; >= 5000 earns an accolade at load)")
+    ap.add_argument("--lineup", default="", help="party line-up in the save: record numbers, e.g. 0,1,2,3 (Hero Erik Veronica Serena)")
     ap.add_argument("--rename", default="", help="stored member names OLD=NEW,... (NEW longer than 6: its namefix code)")
     ap.add_argument("--keep", action="store_true", help="leave the emulator running")
     ap.add_argument("--pure-code", action="store_true", help="bisect: unpatched executable (test hook, text log, grammar pass)")

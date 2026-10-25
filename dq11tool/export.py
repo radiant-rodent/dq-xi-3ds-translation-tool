@@ -620,33 +620,61 @@ TALK_STYLE = {"win_talk_3d": (15.0, 2.0)}   # experimental (talk_lines=4 is off 
 # fit): (layout, panes, table, how the name is shown, new pane width or None). The glyphs of
 # the pane are narrowed so the longest translated name fits ("line": every line of a two-line
 # name, "joined": the name on one line, "bullet": "・" + the name on one line).
+TARGET_COLUMN = 78.0
 RUNTIME_FIT = [
-    # the target label floats over the monster (no frame): wider than the Japanese 90 px
-    ("win_target_3d", ("txt_target",), "enemy_base.bxon", "line", 130.0),
-    ("win_target_2d", ("txt_target",), "enemy_base.bxon", "line", 120.0),
-    ("win_target_2d", ("txt_command",), None, "line", 100.0),         # skill names: width only
+    # the declared action (command / target) on the lower screen, one column per party member
+    # under its status window (80 px apart, centred at x 40, 120, 200, 280): at most 78 px, or
+    # the labels of neighbouring members overlap (user 2026-10-25, were 130 / 120 px). The
+    # runtime fit (autofit "fim") narrows a long name until it fits the two lines
+    ("win_target_3d", ("txt_target",), "enemy_base.bxon", "line", TARGET_COLUMN),
+    ("win_target_3d", ("txt_command",), None, "line", TARGET_COLUMN),  # skill names: width only
+    ("win_target_2d", ("txt_target",), "enemy_base.bxon", "line", TARGET_COLUMN),
+    ("win_target_2d", ("txt_command",), None, "line", TARGET_COLUMN),
     # enemy list: the count column right of the names is one digit now (codefix "%d匹"), so the
-    # names may use the room up to it (window 240 / 225 px, names start at x 25 / 21; the digit ends at x 226 / 214)
-    ("win_enemy_3d", tuple(f"txt_l{i}" for i in range(1, 8)), "enemy_base.bxon", "joined", 185.0),
-    ("win_enemy_2d", tuple(f"txt_l{i}" for i in range(1, 8)), "enemy_base.bxon", "joined", 185.0),
+    # names may use the room up to it (window 240 / 225 px, names start at x 25 / 21; the digit
+    # (6 / 8 px) ends at x 226 / 214). The pane must hold the longest name at the narrowest glyph
+    # level / autofit.MARGIN, or the fit scales it (blurry "Vicious hard-boiled eggsoskeleton",
+    # 2D9 185 px; user 2026-10-25): wider, and moved left (RUNTIME_MOVE_X). 3D: 199 px, the
+    # cursor is right before the names; only that name (3D12 198 px) still gets a 1.5 % scale
+    ("win_enemy_3d", tuple(f"txt_l{i}" for i in range(1, 8)), "enemy_base.bxon", "joined", 199.0),
+    ("win_enemy_2d", tuple(f"txt_l{i}" for i in range(1, 8)), "enemy_base.bxon", "joined", 189.0),
     ("item_details_3d", ("txt_monster",), "enemy_base.bxon", "bullet", None),
     ("item_details_2d", ("txt_monster",), "enemy_base.bxon", "bullet", None),
     # battle commands, right column (Abilities / Items / Equip, filled at runtime): 3D panes
     # widened from 50 to 54 px (right-aligned at x 144, still clear of the left column)
     ("win_command_3d", ("txt_r1", "txt_r2", "txt_r3"), (8049, 7633, 11540), "line", 54.0),
-    # 2D: 40 -> 43 px (the text starts 3 px further left; "Attack" keeps 21..70 px of the left column)
-    ("win_command_2d", ("txt_r1", "txt_r2", "txt_r3"), (8049, 7633, 11540), "line", 43.0),
+    # 2D: 44 px, the narrowest 2D9 "Abilities" is 43 px (its i/l/t hardly condense); a pane
+    # narrower than that scaled it past the last glyph level: blurry (user 2026-10-25)
+    ("win_command_2d", ("txt_r1", "txt_r2", "txt_r3"), (8049, 7633, 11540), "line", 44.0),
     # the "Organise Items" button of the bag (mainmenu_text 41442); the X icon takes ~18 px
     ("win_dougu_sort2_3d", ("txt_title",), (41442,), "joined", None),
     ("win_dougu_sort2_2d", ("txt_title",), (41442,), "joined", None),
 ]
 RUNTIME_RESERVE = {"win_dougu_sort2_3d": 18.0, "win_dougu_sort2_2d": 18.0}   # px not usable by text
-# The 3D target label is drawn on the bottom screen centred at x 40 (the Japanese 90 px pane
-# just fits); moved right so the 130 px pane stays on screen (found in battle 2026-10-13:
-# "Malicious / Abominable Showman" was cut at the left edge)
-RUNTIME_MOVE_X = {"win_target_3d": {"null_win_target": 25.0},
-                  # 2D: "Vicious hard-boiled eggsoskeleton" was cut at the left edge (2026-10-17)
-                  "win_target_2d": {"null_win_target": 25.0}}
+# Pane moves: (the target labels were moved 25 px right for their 130 / 120 px panes; that
+# pushed the 4th member's label off the screen's right edge, 2026-10-25)
+RUNTIME_MOVE_X: dict = {
+    # 2D battle commands (window 125 px): the left words (panes right-anchored at x 81, text from
+    # 21) ran into the right ones ("AttackAbilities", "DefendEquip", user 2026-10-25). Left
+    # words now in 21..60 (crisp glyph level 3 at most: "Defend" 37 px), before the right
+    # column's cursor (62..78); right words in 76..120
+    "win_command_2d": {"txt_l1": -21.0, "txt_l2": -21.0, "txt_l3": -21.0,
+                       "txt_r1": 2.0, "txt_r2": 2.0, "txt_r3": 2.0},
+    # enemy list names start closer to the cursor (2D x 19, 3D x 24): the longest name ends
+    # before the count digit
+    "win_enemy_2d": {f"txt_l{i}": -2.0 for i in range(1, 8)},
+    "win_enemy_3d": {f"txt_l{i}": -1.0 for i in range(1, 8)}}
+# The target labels three lines high instead of two (2D 30 -> 36 px, 2D9 11 px lines; 3D 40 ->
+# 48 px, 15 px lines), the top edge where it was: in the 78 px column 35 / 68 monster names
+# needed a third line, which the runtime fit could only get by scaling the text (blurry, user
+# 2026-10-25); with three lines every name fits in crisp glyphs. pane -> (dy, dheight)
+RUNTIME_MOVE = {"win_target_2d": {"txt_target": (-3.0, 6.0)},
+                # 3D: the whole group 5 px up, or a third line sits on the panel's lower frame
+                "win_target_3d": {"txt_target": (-4.0, 8.0), "null_win_target": (5.0, 0.0)}}
+# panes set to a width narrower than their own (the runtime fit narrows the text to it)
+RUNTIME_WIDTH_EXACT = {"win_command_2d": {"txt_l1": 39.0, "txt_l2": 39.0, "txt_l3": 39.0},
+                       # the Japanese 3D action labels are 90 px, wider than their column
+                       "win_target_3d": {"txt_target": TARGET_COLUMN, "txt_command": TARGET_COLUMN}}
 MIN_RUNTIME_SQUEEZE = 0.75
 
 
@@ -900,6 +928,8 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
                 if rt:
                     runtime_fit(lay, base, runtime[0], runtime[1], squeeze=not opts.runtime_fit)
                     lay.move_x.update(RUNTIME_MOVE_X.get(base, {}))
+                    lay.width_exact.update(RUNTIME_WIDTH_EXACT.get(base, {}))
+                    lay.move.update(RUNTIME_MOVE.get(base, {}))
                 if is_talk:
                     names = [p.name for p in lay.text_panes() if p.name in TALK_PANES]
                     if opts.talk_buffer:

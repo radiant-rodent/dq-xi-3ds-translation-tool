@@ -361,6 +361,11 @@ screenshots), `events.txt` (one line per message, `[layout]` = layout placeholde
 (also "emulator exited"), 2 invalid (no text after the talk / boot failed), 3 text records lost.
 Options: `--mode 2d|3d|2way`, `--party asis|strong|godlike`, `--members 1,2` (PartyAdd ids),
 `--gold N`, `--inputs` (after the talk: buttons, `wait:S`, `shot[:NAME]`, `battle`), `--keep`.
+`--lineup 0,1,2,3` puts the whole party in the battle (PartyAdd does nothing this early in
+the story): the run's save gets the line-up (0x3E04), its count (0x6580), the joined flags
+(global flags 325-332) and Follow Orders tactics (record +0x1C = 5), and the arena record 25
+gets the battle settings of story battle 5 (`battleparam.FREE_PARTY_FROM`), or the hero
+fights alone. The stat preset (`--party`) then covers every member.
 
 How it works:
 - **Saves per display mode** (`scenario.SAVES`): `user_citra` (2way: 3D top + 2D bottom, the
@@ -451,7 +456,7 @@ Free `.text` tail after 0x724040 (codestr's moved strings now go to the `.rodata
 | 0x724400 | `grammar_code.py` (battle grammar pass) |
 | 0x724A00-0x724BBC | `wordwrap.py` (writer + line measurer hooks, shared measure) |
 | 0x7249E0-0x724A00 | `autofit` BITMAP (characters with narrow glyphs, `fontnarrow.CHARS`) |
-| 0x724BBC-0x724BF0 | `autofit.SCALE_CODE` (scale fallback past the last narrow level) |
+| 0x724BBC-0x724C00 | `autofit.SCALE_CODE` (scale fallback past the last narrow level, rect_width) |
 | 0x724C00-0x724F00 | `textlog.py` (test builds) and the debug probes |
 | 0x724F00-0x724F98 | `testhook.py` (test input, test builds) |
 | 0x724F98-0x725000 | `autofit.REMAP_CODE` (string -> narrow glyph level, in place) |

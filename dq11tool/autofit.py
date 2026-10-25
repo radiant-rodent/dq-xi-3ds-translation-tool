@@ -26,9 +26,10 @@ level by level, until it fits:
         w = CalcStringWidth(writer, str, len) (0x713344) > pane width * MARGIN: next level;
         past the last level: x scale and character spacing *= max(usable / w, MIN_FACTOR)
       "fim" (multi-line box): the text wraps at the pane width as before; while its wrapped
-        height (CalcStringRect 0x6EFF84) is more than the pane height [pane+0x40]: next
-        level; past the last one f *= STEP (at most STEPS times, not below MIN_FACTOR) on a
-        copy of the writer, then x and y scale, character and line spacing *= f
+        rect (CalcStringRect 0x6EFF84) is higher than the pane [pane+0x40] or wider than it
+        [pane+0x3C] (a word longer than the line is not wrapped, 2026-10-25): next level;
+        past the last one f *= STEP (at most STEPS times, not below MIN_FACTOR) on a copy of
+        the writer, then x and y scale, character and line spacing *= f (1.0 if it fit)
       "fl1".."fl4": always that level (a pane the exporter sized for it: the lower-screen
         2D talk window, export.TALK_LOWER_2D)
       then: ldr r0, [r4, #0xF8] ; b 0x53F588
@@ -61,6 +62,7 @@ REMAP_AT = 0x724F98                           # after testhook's code (0x724F00 
 REMAP_END = 0x725000                          # end of .text
 SCALE_AT = 0x724BBC                           # after wordwrap's code, before textlog (0x724C00)
 SCALE_END = 0x724C00
+RECT_WIDTH_AT = SCALE_AT + 0x34               # rect_width, after scale_writer in SCALE_CODE
 BITMAP_AT = 0x7249E0                          # after grammar_code (ends 0x7249E0), before wordwrap
 MARKER = b"fit"                               # one-line label
 MARKER_MULTI = b"fim"                         # multi-line box
@@ -104,7 +106,7 @@ fit:
     blls {REMAP_AT:#x}
     b out
 label:
-    ldr r0, flt_max
+    mov r0, #0x7f000000       @ 1.7e38: the line never wraps
     str r0, [r7, #0x30]
     vldr s16, [r4, #0x3c]
     vldr s1, margin
@@ -134,34 +136,27 @@ o_scale:
     vmul.f32 s1, s1, s0
     vstr s1, [r7, #0x34]
     b out
-multi:
+multi:                        @ next level while too high or too wide, then scale steps
     vldr s20, [r4, #0x40]
     vldr s16, one             @ not vmov #1.0: VFPv3, undefined on the 3DS (VFPv2)
+    mov r10, #{STEPS}
 m_lvl:
     bl wrapped_h
-    vcmpe.f32 s0, s20
-    vmrs APSR_nzcv, fpscr
-    ble out
+    ble m_done                @ fits (scaling by s16 = 1.0 changes nothing)
     cmp r8, #{LEVELS}
-    beq m_scale
+    beq m_step
     add r8, r8, #1
     bl {REMAP_AT:#x}
     b m_lvl
-m_scale:
-    mov r10, #{STEPS}
-m_loop:
+m_step:
     vldr s1, step
     vmul.f32 s16, s16, s1
     vcmpe.f32 s16, s18
     vmrs APSR_nzcv, fpscr
     vmovlt.f32 s16, s18
     blt m_done
-    bl wrapped_h
-    vcmpe.f32 s0, s20
-    vmrs APSR_nzcv, fpscr
-    ble m_done
     subs r10, r10, #1
-    bne m_loop
+    bne m_lvl
 m_done:
     mov r0, r7
     bl {SCALE_AT:#x}
@@ -172,7 +167,7 @@ out:
 leave:
     ldr r0, [r4, #0xf8]
     b {RETURN_TO:#x}
-wrapped_h:                    @ height of the wrapped text, measured with a copy of the writer
+wrapped_h:                    @ gt: the wrapped text, measured with a copy of the writer, does not fit
     push {{r0, lr}}             @ scaled by s16 (measuring moves the writer's pen: the real one
     add r0, sp, #8            @ would draw the text lower); 8 bytes keep the stack aligned
     mov r1, r7
@@ -189,9 +184,15 @@ wrapped_h:                    @ height of the wrapped text, measured with a copy
     vldr s1, [sp, #0x5c]
     vsub.f32 s0, s1, s0
     vabs.f32 s0, s0
+    vcmpe.f32 s0, s20         @ gt: higher than the pane ...
+    vmrs APSR_nzcv, fpscr
+    bgt wh_out
+    bl {RECT_WIDTH_AT:#x}     @ ... or wider: one word longer than the line is not wrapped
+    vldr s1, [r4, #0x3c]      @ ("eggsoskeleton" ran into the next 78 px label, 2026-10-25)
+    vcmpe.f32 s0, s1
+    vmrs APSR_nzcv, fpscr
+wh_out:
     pop {{r0, pc}}
-flt_max:
-    .word 0x7f7fffff
 margin:
     .float {MARGIN}
 min_factor:
@@ -217,6 +218,11 @@ scale_writer:
     vldr s0, [r0, #0x38]
     vmul.f32 s0, s0, s16
     vstr s0, [r0, #0x38]
+    bx lr
+rect_width:                   @ width of the rect wrapped_h measured (its sp + 0x50: l, t, r, b)
+    vldr s0, [sp, #0x50]
+    vldr s1, [sp, #0x58]
+    vsub.f32 s0, s1, s0
     bx lr
 """
 
@@ -304,21 +310,21 @@ def assemble_all() -> dict[str, bytes]:
 
 
 CODE = bytes.fromhex(
-    "9900d4e5660050e35300001a9a00d4e5690050e36c0050134f00001af0472de9068b2ded60d04de298708de2"
-    "a45094e5be6cd4e1000055e3000056134300000a0080a0e3c30300eb000050e33f00000a569a9fed9b00d4e5"
-    "740050e30500000a6d0050e31f00000a308040e2040058e3b803009b350000ea28019fe5300087e50f8a94ed"
-    "480adfed208a28ee0700a0e10510a0e10620a0e199bcffebc80ab4ee10faf1ee290000da040058e30200000a"
+    "9900d4e5660050e34d00001a9a00d4e5690050e36c0050134900001af0472de9068b2ded60d04de298708de2"
+    "a45094e5be6cd4e1000055e3000056133d00000a0080a0e3c30300eb000050e33900000a569a9fed9b00d4e5"
+    "740050e30500000a6d0050e31f00000a308040e2040058e3b803009b2f0000ea7f04a0e3300087e50f8a94ed"
+    "480adfed208a28ee0700a0e10510a0e10620a0e199bcffebc80ab4ee10faf1ee230000da040058e30200000a"
     "018088e2a70300ebf3ffffea000a88eec90ab4ee10faf1ee490ab0be020ad7ed800a60ee020ac7ed0d0ad7ed"
-    "800a60ee0d0ac7ed190000ea10aa94ed318a9fed1b0000ebca0ab4ee10faf1ee130000da040058e30200000a"
-    "018088e2910300ebf6ffffea08a0a0e3250adfed208a28eec98ab4ee10faf1ee498ab0be050000ba0b0000eb"
-    "ca0ab4ee10faf1ee010000da01a05ae2f3ffff1a0700a0e18a0200eb60d08de2068bbdecf047bde8f80094e5"
-    "f86cf8ea01402de908008de20710a0e14820a0e395cae7eb08008de27e0200eb08008de250108de20520a0e1"
-    "0630a0e16b2fffeb150a9ded170addedc00a30eec00ab0ee0180bde8ffff7f7f48e17a3fcdcc0c3f1f856b3f"
+    "800a60ee0d0ac7ed130000ea10aa94ed318a9fed08a0a0e3140000eb0c0000da040058e30200000a018088e2"
+    "920300ebf8ffffea270adfed208a28eec98ab4ee10faf1ee498ab0be010000ba01a05ae2f0ffff1a0700a0e1"
+    "900200eb60d08de2068bbdecf047bde8f80094e5fe6cf8ea01402de908008de20710a0e14820a0e39bcae7eb"
+    "08008de2840200eb08008de250108de20520a0e10630a0e1712fffeb150a9ded170addedc00a30eec00ab0ee"
+    "ca0ab4ee10faf1ee030000ca840200eb0f0ad4ede00ab4ee10faf1ee0180bde848e17a3fcdcc0c3f1f856b3f"
     "0000803f")
 
 SCALE_CODE = bytes.fromhex(
     "020a90ed080a20ee020a80ed030a90ed080a20ee030a80ed0d0a90ed080a20ee0d0a80ed0e0a90ed080a20ee"
-    "0e0a80ed1eff2fe1")
+    "0e0a80ed1eff2fe1140a9ded160addedc00a30ee1eff2fe1")
 
 REMAP_CODE = bytes.fromhex(
     "0000a0e30510a0e186a085e00a0051e11eff2f21b230d1e0040053e302108102f9ffff0ae22c43e2010b52e3"
