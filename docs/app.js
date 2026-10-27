@@ -125,21 +125,27 @@ class StorageSink {
   file() { return this.handle.getFile(); }
 }
 
-// Saves parts (Uint8Arrays and slices of the player's file) as one download. Chrome on Android
-// may fail to read a Blob built from slices of a picked file; then the parts are written to a
-// real file in the page's own storage (origin private file system) and that file is offered.
+// Saves parts (Uint8Arrays, slices of the player's file or of the image in the page's own storage)
+// as one download. The image in storage (Android) goes through the service worker (sw.js) as a
+// streamed download. Otherwise a blob: URL; if the browser cannot read a Blob built from slices
+// of the picked file, the parts are first copied to a file in the page's own storage.
 async function save(parts, name) {
+  const size = parts.reduce((n, p) => n + (p.length ?? p.size), 0);
+  if (!(image instanceof BlobSink) && await worker()) {
+    saveViaWorker(parts, name, size);
+    return;
+  }
   const blob = new Blob(parts, { type: "application/octet-stream" });
   let at = 0;
   const i = parts.findIndex((p) => { if (p instanceof Uint8Array) { at += p.length; return false; } return true; });
   try {
     if (i >= 0) await blob.slice(at, at + 1).arrayBuffer();
-    download(blob, name);
+    offer(URL.createObjectURL(blob), name, size, true);
     return;
   } catch (e) {
     if (e?.name !== "NotReadableError") throw e;
   }
-  const dir = await storageDir(blob.size);
+  const dir = await storageDir(size);
   const handle = await dir.getFileHandle(name, { create: true });
   const out = await handle.createWritable();
   let done = 0;
@@ -147,7 +153,7 @@ async function save(parts, name) {
     for (const p of parts) {
       await out.write(p instanceof Uint8Array ? p : new Uint8Array(await p.arrayBuffer()));
       done += p.length ?? p.size;
-      progress("Preparing the download", done, blob.size);
+      progress("Preparing the download", done, size);
     }
     await out.close();
   } catch (e) {
@@ -155,7 +161,9 @@ async function save(parts, name) {
     await dir.removeEntry(name).catch(() => {});
     throw e;
   }
-  download(await handle.getFile(), name);
+  const file = await handle.getFile();
+  if (await worker()) saveViaWorker([file], name, size);
+  else offer(URL.createObjectURL(file), name, size, true);
 }
 
 // Temporary copies from earlier visits (they cannot be removed while the download reads them).
@@ -163,14 +171,50 @@ navigator.storage?.getDirectory?.().then(async (dir) => {
   for await (const name of dir.keys()) if (/\.(3ds|cia)$/i.test(name)) await dir.removeEntry(name).catch(() => {});
 }).catch(() => {});
 
-function download(blob, name) {
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  // the URL is not revoked: a multi-GB download may still be reading it long after the click
+// The service worker that serves dl/<id>/<name> (null where there is none, e.g. private windows).
+const swReady = navigator.serviceWorker
+  ? navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.ready).catch(() => null)
+  : Promise.resolve(null);
+const worker = () => Promise.race([swReady, new Promise((r) => setTimeout(() => r(null), 3000))]);
+const downloads = new Map();          // id -> {parts, size}, handed to the worker on request
+navigator.serviceWorker?.addEventListener("message", (e) => {
+  if (e.data?.type === "download") e.ports[0]?.postMessage(downloads.get(e.data.id) ?? null);
+});
+navigator.serviceWorker?.startMessages?.();
+
+function saveViaWorker(parts, name, size) {
+  const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  downloads.set(id, { parts, size });
+  offer(`dl/${id}/${encodeURIComponent(name)}`, name, size, false);
+  // a worker that receives messages is not stopped while it streams the file
+  clearInterval(saveViaWorker.ping);
+  saveViaWorker.ping = setInterval(() => swReady.then((r) => r?.active?.postMessage("ping")), 10000);
+}
+
+// Shows a download button for the file and starts the download once by itself.
+function offer(href, name, size, isBlob) {
+  const box = $("download");
+  box.replaceChildren();
+  const start = () => {
+    if (isBlob) {
+      const a = document.createElement("a");
+      a.href = href; a.download = name;
+      document.body.append(a); a.click(); a.remove();
+    } else {
+      // a navigation in a hidden frame: the worker answers it as an attachment
+      const f = document.createElement("iframe");
+      f.hidden = true; f.src = href;
+      document.body.append(f);
+      setTimeout(() => f.remove(), 60000);
+    }
+  };
+  const b = document.createElement("button");
+  b.textContent = `Download ${name} (${(size / 2 ** 30).toFixed(1)} GB)`;
+  b.onclick = start;
+  box.append(b);
+  box.hidden = false;
+  start();
+  // blob: URLs are not revoked: a multi-GB download may still be reading one long after the click
 }
 
 function outName(ext) {
@@ -207,11 +251,12 @@ function lostFile() {
 function timings() {
   const parts = stages.map((x, i) => [x.stage, ((stages[i + 1]?.start ?? x.end) - x.start) / 1000])
     .filter(([, s]) => s >= 1).map(([stage, s]) => `${stage.toLowerCase()} ${Math.round(s)} s`);
-  return parts.length ? ` (${parts.join(", ")})` : "";
+  return parts.length ? `: ${parts.join(", ")}` : "";
 }
 
 async function run(job) {
   busy = true; wasHidden = false; stages = []; updateButtons();
+  $("download").hidden = true;
   await keepAwake(true);
   try {
     await job();
@@ -229,13 +274,15 @@ $("make-3ds").onclick = () => run(async () => {
   const name = outName(".3ds"), t0 = performance.now();
   const img = await patchedImage();
   await save(img instanceof BlobSink ? img.parts : [img], name);
-  status(`✓ ${name} is ready in ${Math.round((performance.now() - t0) / 1000)} s${timings()}. Your browser saves it like any download.`, "ok");
+  status(`✓ ${name} is ready (patched in ${Math.round((performance.now() - t0) / 1000)} s${timings()}). ` +
+    "The download starts by itself; if it does not, use the button below.", "ok");
 });
 
 $("make-cia").onclick = () => run(async () => {
   const name = outName(".cia"), t0 = performance.now();
   await save(await buildCia(await patchedImage(), progress, patch.header.cia), name);
-  status(`✓ ${name} is ready in ${Math.round((performance.now() - t0) / 1000)} s${timings()}. Install it with FBI.`, "ok");
+  status(`✓ ${name} is ready (patched in ${Math.round((performance.now() - t0) / 1000)} s${timings()}). ` +
+    "The download starts by itself; if it does not, use the button below. Install the .cia with FBI.", "ok");
 });
 
 $("rom").onchange = (e) => e.target.files[0] && useRom(e.target.files[0]);

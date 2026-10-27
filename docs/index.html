@@ -48,6 +48,7 @@
   button:disabled { opacity: .45; cursor: default; }
   .hint { color: var(--muted); font-size: .9rem; margin: 10px 0 0; }
   progress { width: 100%; height: 10px; margin-top: 14px; accent-color: var(--accent); }
+  #download { margin-top: 12px; }
   #status { margin-top: 8px; font-size: .95rem; min-height: 1.5em; overflow-wrap: anywhere; }
   details { margin-top: 10px; font-size: .95rem; }
   summary { cursor: pointer; color: var(--muted); }
@@ -104,9 +105,10 @@
       <b>.cia</b>: to install the English game on a modded 3DS with FBI (needs Luma3DS, which provides
       the signature patches; replaces an installed copy of the game).<br>
       Both are about as large as your dump and are saved like any other download.<br>
-      On a phone this takes a while: keep this page open with the screen on until the download starts.</p>
+      On a phone this takes a while: keep this page open with the screen on until the download has finished.</p>
     <progress id="bar" max="1" value="0" hidden></progress>
     <div id="status"></div>
+    <div id="download" class="buttons" hidden></div>
   </section>
 
   <details class="card">
