@@ -376,8 +376,18 @@ class Writer {
   async zeros(n) {
     while (n > 0) { const k = Math.min(n, CHUNK); await this.write(new Uint8Array(k)); n -= k; }
   }
+  // a sink that takes bytes gets them from one stream (see SequentialReader)
   async copy(rom, off, size) {
-    while (size > 0) { const k = Math.min(size, CHUNK); await this.write(rom.file.slice(off, off + k)); off += k; size -= k; }
+    const reader = !this.sink.byRef && rom.file.stream && size ? new SequentialReader(rom.file, off, off + size) : null;
+    try {
+      while (size > 0) {
+        const k = Math.min(size, CHUNK);
+        await this.write(reader ? await reader.read(off, k) : rom.file.slice(off, off + k));
+        off += k; size -= k;
+      }
+    } finally {
+      reader?.cancel();
+    }
   }
 }
 

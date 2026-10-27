@@ -69,13 +69,17 @@ async function useRom(file) {
 }
 
 // The patched .3ds: a BlobSink (mostly slices of the player's file, so keeping it is cheap), or
-// a file in the page's own storage where the browser cannot read a Blob made of such slices
-// (Chrome on Android); writing it while building costs no extra pass over the game. The .cia is
-// made from it, so saving both builds the game only once.
+// a file in the page's own storage on Android and wherever the browser cannot read a Blob made
+// of such slices. Android Chrome reopens the picked file for every slice it reads, so saving a
+// Blob of ~21000 of them never finished ("Failed - network error"); writing the image while
+// building costs no extra pass over the game. The .cia is made from it, so saving both builds
+// the game only once.
 async function patchedImage() {
   if (!image) {
     if (!files) files = await applyFiles(patch, rom, progress);
-    const sink = await slicesReadable(rom.file) ? new BlobSink() : await StorageSink.create("image.3ds", rom.file.size);
+    const byRef = !/Android/i.test(navigator.userAgent) && await slicesReadable(rom.file);
+    const size = Math.max(...rom.partitions.map((p) => p.offset + p.size));   // about the patched size
+    const sink = byRef ? new BlobSink() : await StorageSink.create("image.3ds", size);
     try {
       await buildImage(rom, files, sink, patch.header.keep_update_partitions, progress);
     } catch (e) {
