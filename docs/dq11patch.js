@@ -381,9 +381,13 @@ class Writer {
   }
 }
 
-// Collects SHA-256 of every 0x1000 block of what passes through (RomFS level 3).
+// Collects SHA-256 of every 0x1000 block of what passes through (RomFS level 3). Two buffers:
+// one is hashed while the next is filled.
 class HashingWriter {
-  constructor(w) { this.w = w; this.buf = new Uint8Array(CHUNK); this.fill = 0; this.hashes = []; }
+  constructor(w) {
+    this.w = w; this.bufs = [new Uint8Array(CHUNK), new Uint8Array(CHUNK)]; this.buf = this.bufs[0];
+    this.fill = 0; this.hashes = []; this.pending = Promise.resolve();
+  }
   // u8: the bytes; ref: what the sink gets instead (a ROM slice holding the same bytes)
   async write(u8, ref = null) {
     await this.w.write(ref && this.w.sink.byRef ? ref : u8);
@@ -401,14 +405,51 @@ class HashingWriter {
   async flush() {
     const n = this.fill, jobs = [];
     for (let i = 0; i < n; i += BLOCK) jobs.push(sha256(this.buf.subarray(i, i + BLOCK)));
-    this.hashes.push(...await Promise.all(jobs));
+    const prev = this.pending;
+    this.pending = Promise.all([prev, Promise.all(jobs)]).then(([, h]) => { for (const x of h) this.hashes.push(x); });
+    await prev;                       // the other buffer is free again
+    this.buf = this.buf === this.bufs[0] ? this.bufs[1] : this.bufs[0];
     this.fill = 0;
   }
   async finish() {
     if (this.fill % BLOCK) await this.write(new Uint8Array(BLOCK - this.fill % BLOCK));
     await this.flush();
+    await this.pending;
     return concat(this.hashes);
   }
+}
+
+// Reads [start, end) of a file front to back as one stream: one open of the file instead of
+// one per RomFS file (21000 of them), which is slow for files picked on Android. read(at, len)
+// must be called with increasing positions; skipped bytes are discarded.
+class SequentialReader {
+  constructor(file, start, end) {
+    this.pos = start; this.cur = new Uint8Array(0); this.off = 0;
+    this.reader = file.slice(start, end).stream().getReader();
+  }
+  async next() {
+    const { value, done } = await this.reader.read();
+    if (done) throw new Error("The file ended early (incomplete dump?).");
+    this.cur = value; this.off = 0;
+  }
+  async read(at, len) {
+    if (at < this.pos) throw new Error("SequentialReader: backwards read");
+    for (let skip = at - this.pos; skip > 0;) {
+      if (this.off === this.cur.length) await this.next();
+      const k = Math.min(skip, this.cur.length - this.off);
+      this.off += k; skip -= k;
+    }
+    const out = new Uint8Array(len);
+    for (let o = 0; o < len;) {
+      if (this.off === this.cur.length) await this.next();
+      const k = Math.min(len - o, this.cur.length - this.off);
+      out.set(this.cur.subarray(this.off, this.off + k), o);
+      this.off += k; o += k;
+    }
+    this.pos = at + len;
+    return out;
+  }
+  cancel() { this.reader.cancel().catch(() => {}); }
 }
 
 async function hashLevel(data) {
@@ -457,21 +498,39 @@ async function writeRomfs(w, rom, replace, progress) {
   await w.write(new Uint8Array(BLOCK));          // IVFC header + master hash, filled in below
   const hw = new HashingWriter(w);
   await hw.write(meta);
-  let cur = 0;
-  for (let i = 0; i < layout.length; i++) {
-    const { f, off, size, nw } = layout[i];
-    if (off > cur) { await hw.zeros(off - cur); cur = off; }
-    if (nw) await hw.write(nw);
-    else {
-      let p = 0;
-      while (p < size) {
-        const k = Math.min(size - p, CHUNK), at = rfs.fileAt(f) + p;
-        await hw.write(await rom.read(at, k), rom.file.slice(at, at + k));
-        p += k;
+  const kept = layout.filter((x) => !x.nw && x.size);
+  const reader = rom.file.stream && kept.length
+    ? new SequentialReader(rom.file, rfs.fileAt(kept[0].f), rfs.fileAt(kept[kept.length - 1].f) + kept[kept.length - 1].size)
+    : { read: rom.read, cancel() {} };
+  // the next chunk is read while the current one is written and hashed
+  const chunks = (function* () {
+    for (const { f, size } of kept)
+      for (let p = 0; p < size; p += CHUNK) yield [rfs.fileAt(f) + p, Math.min(size - p, CHUNK)];
+  })();
+  const fetchNext = () => { const n = chunks.next(); return n.done ? null : reader.read(...n.value); };
+  let ahead = fetchNext();
+  try {
+    let cur = 0;
+    for (let i = 0; i < layout.length; i++) {
+      const { f, off, size, nw } = layout[i];
+      if (off > cur) { await hw.zeros(off - cur); cur = off; }
+      if (nw) await hw.write(nw);
+      else {
+        let p = 0;
+        while (p < size) {
+          const k = Math.min(size - p, CHUNK), at = rfs.fileAt(f) + p;
+          const data = await ahead;
+          ahead = fetchNext();
+          await hw.write(data, rom.file.slice(at, at + k));
+          p += k;
+        }
       }
+      cur += size;
+      if (i % 256 === 0) progress("Writing the translated game", w.pos - start, rfs.l3Size);
     }
-    cur += size;
-    if (i % 256 === 0) progress("Writing the translated game", w.pos - start, rfs.l3Size);
+  } finally {
+    ahead?.catch(() => {});
+    reader.cancel();
   }
   const level2 = await hw.finish();
   const level1 = await hashLevel(level2);

@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream, openAsBlob, statSync } from "node:fs";
 import { open } from "node:fs/promises";
+import { Readable } from "node:stream";
 import { applyFiles, buildCia, buildImage, checkSource, layeredFsZip, loadPatch, openRom } from "../docs/dq11patch.js";
 
 const [romPath, patchPath, outPath, refPath, ciaPath, refCiaPath] = process.argv.slice(2);
@@ -23,7 +24,8 @@ async function fileLike(path) {
       const buf = new Uint8Array(b - a);
       const { bytesRead } = await fh.read(buf, 0, buf.length, a);
       return buf.buffer.slice(0, bytesRead);
-    } }),
+    }, stream: () => Readable.toWeb(createReadStream(path, { start: a, end: b - 1 })) }),
+    stream: () => Readable.toWeb(createReadStream(path)),
   };
 }
 const rom = await openRom(await fileLike(romPath));

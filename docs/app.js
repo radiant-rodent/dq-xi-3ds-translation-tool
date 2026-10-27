@@ -10,7 +10,12 @@ function status(text, cls = "") {
   $("status").className = cls;
 }
 
+// how long each stage took, shown when a job is done (tells where a slow device spends its time)
+let stages = [];
 function progress(stage, done, total) {
+  const now = performance.now(), last = stages[stages.length - 1];
+  if (!last || last.stage !== stage) stages.push({ stage, start: now, end: now });
+  else last.end = now;
   const bar = $("bar");
   bar.hidden = false;
   bar.value = total ? done / total : 0;
@@ -195,8 +200,14 @@ function lostFile() {
     "and keep this page open with the screen on until the download starts.", "err");
 }
 
+function timings() {
+  const parts = stages.map((x, i) => [x.stage, ((stages[i + 1]?.start ?? x.end) - x.start) / 1000])
+    .filter(([, s]) => s >= 1).map(([stage, s]) => `${stage.toLowerCase()} ${Math.round(s)} s`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
 async function run(job) {
-  busy = true; wasHidden = false; updateButtons();
+  busy = true; wasHidden = false; stages = []; updateButtons();
   await keepAwake(true);
   try {
     await job();
@@ -214,13 +225,13 @@ $("make-3ds").onclick = () => run(async () => {
   const name = outName(".3ds"), t0 = performance.now();
   const img = await patchedImage();
   await save(img instanceof BlobSink ? img.parts : [img], name);
-  status(`✓ ${name} is ready (${Math.round((performance.now() - t0) / 1000)} s). Your browser saves it like any download.`, "ok");
+  status(`✓ ${name} is ready in ${Math.round((performance.now() - t0) / 1000)} s${timings()}. Your browser saves it like any download.`, "ok");
 });
 
 $("make-cia").onclick = () => run(async () => {
   const name = outName(".cia"), t0 = performance.now();
   await save(await buildCia(await patchedImage(), progress, patch.header.cia), name);
-  status(`✓ ${name} is ready (${Math.round((performance.now() - t0) / 1000)} s). Install it with FBI.`, "ok");
+  status(`✓ ${name} is ready in ${Math.round((performance.now() - t0) / 1000)} s${timings()}. Install it with FBI.`, "ok");
 });
 
 $("rom").onchange = (e) => e.target.files[0] && useRom(e.target.files[0]);
