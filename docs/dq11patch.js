@@ -7,11 +7,16 @@
 //   const files = await applyFiles(patch, rom, progress);
 //   const sink = new BlobSink();
 //   await buildImage(rom, files, sink, patch.header.keep_update_partitions, progress);
-//   download(sink.blob)
+//   download(new Blob(sink.parts))             // or buildCia(sink, progress)
 //
-// A sink is {write(position, part), close()}: a part is a Uint8Array or a Blob (a slice of the
-// ROM file, at most CHUNK bytes). Most of the image is unchanged ROM data, so BlobSink keeps
-// only references to it and the result costs ~100 MB of memory. progress(stage, done, total).
+// A sink is {write(position, part), close(), byRef}: a part is a Uint8Array or, where it has
+// not been read anyway or byRef is set, a Blob (a slice of the ROM file, at most CHUNK bytes).
+// Most of the image is unchanged ROM data, so BlobSink (byRef) keeps only references to it and
+// the result costs ~100 MB of memory. progress(stage, done, total).
+//
+// The built image is read through its parts (BlobSink.slice), never as one Blob made of them:
+// Chrome on Android failed to read such a Blob (NotReadableError) when the ROM came from the
+// system file picker, although it read slices of the file itself fine.
 
 const MEDIA_UNIT = 0x200;
 const BLOCK = 0x1000;
@@ -323,9 +328,10 @@ export async function applyFiles(patch, rom, progress = () => {}) {
 // ---------------------------------------------------------------------------- image rebuild
 
 // Collects the image as Blob parts; earlier positions can be overwritten if they lie inside
-// one Uint8Array part (the headers, written as placeholders first).
+// one Uint8Array part (the headers, written as placeholders first). Afterwards it serves as the
+// image for openRom/buildCia: slice(a, b) reads the parts one by one.
 export class BlobSink {
-  constructor() { this.parts = []; this.starts = []; this.size = 0; this.blob = null; }
+  constructor() { this.parts = []; this.starts = []; this.size = 0; this.byRef = true; }
   write(pos, part) {
     const len = part.length ?? part.size;
     if (pos === this.size) {
@@ -338,7 +344,26 @@ export class BlobSink {
     if (i < 0 || !(p instanceof Uint8Array) || at + len > p.length) throw new Error("BlobSink: unsupported overwrite");
     p.set(part, at);
   }
-  close() { this.blob = new Blob(this.parts, { type: "application/octet-stream" }); this.parts = []; }
+  close() {}
+  // the parts covering [a, b): subarrays of the Uint8Array parts, slices of the Blob parts
+  pieces(a, b) {
+    let lo = 0, hi = this.starts.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (this.starts[m] <= a) lo = m; else hi = m - 1; }
+    const out = [];
+    for (let i = lo; i < this.parts.length && this.starts[i] < b; i++) {
+      const p = this.parts[i], s = this.starts[i];
+      const from = Math.max(a - s, 0), to = Math.min(b - s, p.length ?? p.size);
+      if (to > from) out.push(p instanceof Uint8Array ? p.subarray(from, to) : p.slice(from, to));
+    }
+    return out;
+  }
+  slice(a, b) {
+    const pieces = this.pieces(a, b);
+    return { size: b - a, arrayBuffer: async () => {
+      const bufs = await Promise.all(pieces.map(async (p) => p instanceof Uint8Array ? p : new Uint8Array(await p.arrayBuffer())));
+      return concat(bufs).buffer;
+    } };
+  }
 }
 
 class Writer {
@@ -361,7 +386,7 @@ class HashingWriter {
   constructor(w) { this.w = w; this.buf = new Uint8Array(CHUNK); this.fill = 0; this.hashes = []; }
   // u8: the bytes; ref: what the sink gets instead (a ROM slice holding the same bytes)
   async write(u8, ref = null) {
-    await this.w.write(ref || u8);
+    await this.w.write(ref && this.w.sink.byRef ? ref : u8);
     let o = 0;
     while (o < u8.length) {
       const k = Math.min(u8.length - o, CHUNK - this.fill);
@@ -661,8 +686,10 @@ async function ciaTmd(titleId, saveSize, contents) {
   return concat([sig, hdr, info, chunks]);
 }
 
-// image: the built .3ds (a Blob, or anything with size/slice). Returns the CIA as Blob parts.
-export async function buildCia(image, progress = () => {}) {
+// image: the built .3ds (a BlobSink, a Blob, or anything with size/slice); known: the patch's
+// "cia" entry (dq11tool/patchfile.py), which spares hashing the game when it matches.
+// Returns the CIA as Blob parts.
+export async function buildCia(image, progress = () => {}, known = null) {
   const img = await openRom(image);
   const titleId = BigInt("0x" + img.ncch.programId);
   const exheader = img.ncch.exheaderSize ? await img.read(img.p0.offset + 0x200, 0x800) : new Uint8Array(0);
@@ -682,6 +709,12 @@ export async function buildCia(image, progress = () => {}) {
   const total = contents.reduce((n, c) => n + c.p.size, 0);
   let done = 0;
   for (const c of contents) {
+    c.size = c.p.size;
+    if (c.index === 0 && known && known.size === c.size && hex(await sha256(img.ncch.header)) === known.ncch_sha256) {
+      c.digest = Uint8Array.from(known.sha256.match(/../g), (x) => parseInt(x, 16));
+      done += c.size;
+      continue;
+    }
     const h = new Sha256();
     for (let o = 0; o < c.p.size; o += CHUNK) {
       const k = Math.min(CHUNK, c.p.size - o);
@@ -690,7 +723,6 @@ export async function buildCia(image, progress = () => {}) {
       progress("Hashing the CIA contents", done, total);
     }
     c.digest = h.digest();
-    c.size = c.p.size;
   }
   const tmd = await ciaTmd(titleId, saveSize, contents);
   const meta = new Uint8Array(META_SIZE);
@@ -715,7 +747,8 @@ export async function buildCia(image, progress = () => {}) {
   for (const { p } of contents) {
     for (let o = 0; o < p.size; o += CHUNK) {
       const k = Math.min(CHUNK, p.size - o);
-      out.push(image.slice(p.offset + o, p.offset + o + k)); pos += k;
+      const a = p.offset + o, b = a + k;
+      out.push(...(image.pieces ? image.pieces(a, b) : [image.slice(a, b)])); pos += k;
     }
     pad();
   }

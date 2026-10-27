@@ -55,7 +55,7 @@ if (refPath) {
 }
 if (ciaPath) {
   const t1 = Date.now();
-  const parts = await buildCia(await fileLike(outPath), progress);
+  const parts = await buildCia(await fileLike(outPath), progress, patch.header.cia);
   const out = await open(ciaPath, "w");
   for (const p of parts) {
     const u8 = p instanceof Uint8Array ? p : new Uint8Array(await p.arrayBuffer());

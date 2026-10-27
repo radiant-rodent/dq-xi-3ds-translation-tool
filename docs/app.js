@@ -63,17 +63,96 @@ async function useRom(file) {
   await checkRom();
 }
 
-// The patched .3ds as a Blob (mostly slices of the player's file, so keeping it is cheap);
-// the .cia is made from it, so saving both builds the game only once.
+// The patched .3ds: a BlobSink (mostly slices of the player's file, so keeping it is cheap), or
+// a file in the page's own storage where the browser cannot read a Blob made of such slices
+// (Chrome on Android); writing it while building costs no extra pass over the game. The .cia is
+// made from it, so saving both builds the game only once.
 async function patchedImage() {
   if (!image) {
     if (!files) files = await applyFiles(patch, rom, progress);
-    const sink = new BlobSink();
-    await buildImage(rom, files, sink, patch.header.keep_update_partitions, progress);
-    image = sink.blob;
+    const sink = await slicesReadable(rom.file) ? new BlobSink() : await StorageSink.create("image.3ds", rom.file.size);
+    try {
+      await buildImage(rom, files, sink, patch.header.keep_update_partitions, progress);
+    } catch (e) {
+      await sink.abort?.();
+      throw e;
+    }
+    image = sink instanceof BlobSink ? sink : await sink.file();
   }
   return image;
 }
+
+async function slicesReadable(file) {
+  try {
+    await new Blob([new Uint8Array(1), file.slice(0, 16)]).slice(1, 17).arrayBuffer();
+    return true;
+  } catch (e) {
+    if (e?.name === "NotReadableError") return false;
+    throw e;
+  }
+}
+
+async function storageDir(size) {
+  if (!navigator.storage?.getDirectory) throw new Error("This browser cannot save the file. Try Chrome on a computer.");
+  const { quota, usage } = await navigator.storage.estimate();
+  if (quota - usage < size)
+    throw new Error(`Not enough free space: the phone needs about ${2 * Math.ceil(size / 2 ** 30)} GB free (a temporary copy, then the download).`);
+  return navigator.storage.getDirectory();
+}
+
+// A sink writing the image to a file in the page's own storage (origin private file system).
+class StorageSink {
+  static async create(name, size) {
+    const handle = await (await storageDir(size)).getFileHandle(name, { create: true });
+    return new StorageSink(handle, await handle.createWritable());
+  }
+  constructor(handle, out) { this.handle = handle; this.out = out; this.byRef = false; }
+  async write(position, part) {
+    const data = part instanceof Uint8Array ? part : new Uint8Array(await part.arrayBuffer());
+    await this.out.write({ type: "write", position, data });
+  }
+  async close() { await this.out.close(); }
+  async abort() { await this.out.abort().catch(() => {}); }
+  file() { return this.handle.getFile(); }
+}
+
+// Saves parts (Uint8Arrays and slices of the player's file) as one download. Chrome on Android
+// may fail to read a Blob built from slices of a picked file; then the parts are written to a
+// real file in the page's own storage (origin private file system) and that file is offered.
+async function save(parts, name) {
+  const blob = new Blob(parts, { type: "application/octet-stream" });
+  let at = 0;
+  const i = parts.findIndex((p) => { if (p instanceof Uint8Array) { at += p.length; return false; } return true; });
+  try {
+    if (i >= 0) await blob.slice(at, at + 1).arrayBuffer();
+    download(blob, name);
+    return;
+  } catch (e) {
+    if (e?.name !== "NotReadableError") throw e;
+  }
+  const dir = await storageDir(blob.size);
+  const handle = await dir.getFileHandle(name, { create: true });
+  const out = await handle.createWritable();
+  let done = 0;
+  try {
+    for (const p of parts) {
+      await out.write(p instanceof Uint8Array ? p : new Uint8Array(await p.arrayBuffer()));
+      done += p.length ?? p.size;
+      progress("Preparing the download", done, blob.size);
+    }
+    await out.close();
+  } catch (e) {
+    await out.abort().catch(() => {});
+    await dir.removeEntry(name).catch(() => {});
+    throw e;
+  }
+  download(await handle.getFile(), name);
+}
+
+// Temporary copies from earlier visits (they cannot be removed while the download reads them).
+navigator.storage?.getDirectory?.().then(async (dir) => {
+  for await (const name of dir.keys()) if (/\.(3ds|cia)$/i.test(name)) await dir.removeEntry(name).catch(() => {});
+}).catch(() => {});
 
 function download(blob, name) {
   const a = document.createElement("a");
@@ -89,28 +168,58 @@ function outName(ext) {
   return romName.replace(/\.(3ds|cci)$/i, "") + "_EN" + ext;
 }
 
+// Phones stop or throttle a page whose screen turns off or that goes to the background.
+let wakeLock = null, wasHidden = false;
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && "wakeLock" in navigator) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.onrelease = () => { wakeLock = null; };
+    } else if (!on && wakeLock) await wakeLock.release();
+  } catch { /* not supported or refused: the job runs anyway */ }
+}
+document.addEventListener("visibilitychange", () => {
+  if (!busy) return;
+  if (document.hidden) wasHidden = true;
+  else keepAwake(true);               // the lock is dropped while the page is hidden
+});
+
+// NotReadableError: the browser can no longer read the .3ds the player chose.
+function lostFile() {
+  rom = null; files = image = null;
+  $("rom").value = "";
+  $("rom-info").innerHTML = `<span class="err">✗ The browser lost access to ${romName}. Choose it again.</span>`;
+  status("✗ The browser could no longer read your .3ds file" +
+    (wasHidden ? " after this page went to the background" : "") + ". " +
+    "On a phone: copy the .3ds to the internal storage (not an SD card or a cloud folder), choose it again, " +
+    "and keep this page open with the screen on until the download starts.", "err");
+}
+
 async function run(job) {
-  busy = true; updateButtons();
+  busy = true; wasHidden = false; updateButtons();
+  await keepAwake(true);
   try {
     await job();
   } catch (e) {
-    status(`✗ ${e.message}`, "err");
+    if (e?.name === "NotReadableError") lostFile();
+    else status(`✗ ${e.message}`, "err");
     console.error(e);
   } finally {
     busy = false; updateButtons();
+    keepAwake(false);
   }
 }
 
 $("make-3ds").onclick = () => run(async () => {
   const name = outName(".3ds"), t0 = performance.now();
-  download(await patchedImage(), name);
+  const img = await patchedImage();
+  await save(img instanceof BlobSink ? img.parts : [img], name);
   status(`✓ ${name} is ready (${Math.round((performance.now() - t0) / 1000)} s). Your browser saves it like any download.`, "ok");
 });
 
 $("make-cia").onclick = () => run(async () => {
   const name = outName(".cia"), t0 = performance.now();
-  const parts = await buildCia(await patchedImage(), progress);
-  download(new Blob(parts, { type: "application/octet-stream" }), name);
+  await save(await buildCia(await patchedImage(), progress, patch.header.cia), name);
   status(`✓ ${name} is ready (${Math.round((performance.now() - t0) / 1000)} s). Install it with FBI.`, "ok");
 });
 
@@ -124,7 +233,8 @@ drop.ondrop = (e) => {
   if (e.dataTransfer.files[0]) useRom(e.dataTransfer.files[0]);
 };
 
-fetch(PATCH_URL).then((r) => {
+// no-cache: always ask whether the patch changed (a cached old one lacks newer shortcuts)
+fetch(PATCH_URL, { cache: "no-cache" }).then((r) => {
   if (!r.ok) throw new Error(`could not load the patch (${r.status})`);
   return usePatch(r, "Current patch");
 }).catch((e) => { $("patch-info").innerHTML = `<span class="err">✗ ${e.message}</span>`; });
