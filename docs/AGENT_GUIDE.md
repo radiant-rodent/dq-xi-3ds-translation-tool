@@ -446,20 +446,26 @@ runs out of the window; 3D bottom screen label "地図切り替え" untranslated
 
 ## Code tail map and executable fixes (2026-10-15)
 
-Free `.text` tail after 0x724040 (codestr's moved strings now go to the `.rodata` padding only,
-`codestr.RESERVED_TEXT_TAIL`):
+Free `.text` tail after 0x72403C (codestr's moved strings now go to the `.rodata` padding only,
+`codestr.RESERVED_TEXT_TAIL`). **0x72403C-0x724380 is for test builds only**: on a real 3DS,
+Luma's LayeredFS writes its RomFS redirection payload there (see "Real 3DS: Luma's LayeredFS"
+below), so release code must never go below 0x724380:
 
 | address | user |
 |---|---|
-| 0x724040-0x7241FC | `autofit.py` (runtime fit of layout text) |
-| 0x724200 / 0x724320-0x72437F | `namefix.py` (party name codes; its name table, written by the export) |
-| 0x724400 | `grammar_code.py` (battle grammar pass) |
-| 0x724A00-0x724BBC | `wordwrap.py` (writer + line measurer hooks, shared measure) |
+| 0x72403C-0x72423C | Luma3DS LayeredFS payload on hardware (0x114 bytes + reserve, `luma.py`) |
+| 0x724040-0x7240D8 | `testhook.py` (test input, test builds) |
+| 0x7240D8-0x724380 | `textlog.py` or the debug probes (test builds) |
+| 0x724380 | `grammar_code.py` (battle grammar pass) |
 | 0x7249E0-0x724A00 | `autofit` BITMAP (characters with narrow glyphs, `fontnarrow.CHARS`) |
+| 0x724A00-0x724BBC | `wordwrap.py` (writer + line measurer hooks, shared measure) |
 | 0x724BBC-0x724C00 | `autofit.SCALE_CODE` (scale fallback past the last narrow level, rect_width) |
-| 0x724C00-0x724F00 | `textlog.py` (test builds) and the debug probes |
-| 0x724F00-0x724F98 | `testhook.py` (test input, test builds) |
+| 0x724C00-0x724DBC | `autofit.py` (runtime fit of layout text) |
+| 0x724DC0 / 0x724EE0-0x724F97 | `namefix.py` (party name codes; its name table, written by the export) |
 | 0x724F98-0x725000 | `autofit.REMAP_CODE` (string -> narrow glyph level, in place) |
+
+`.rodata` padding: its first 39 bytes (0x79AA18) hold Luma's mod path on hardware;
+`codestr.free_space` leaves them out (moved strings start at 0x79AA40).
 
 `emutest/autofittest.py` checks that `autofit.CODE` matches its source and that the caves do
 not overlap. `codefix.py` holds the small fixes: `INSTRUCTIONS` (single instructions, checked
@@ -639,6 +645,25 @@ against the original bytes), `patch_name_table` / `patch_save_code` (below), inl
   weapon shops. "No result after 80 presses" with a long sleep/Kasap battle is the runner's
   press budget, not a crash.
 
+
+## Real 3DS: Luma's LayeredFS patches the code (2026-10-28)
+
+A player using the LayeredFS zip (`luma/titles/0004000000199200/`) crashed on a real 3DS right
+after the title screen; the same zip runs in Azahar. Luma's loader (`patcher.c`,
+`patchLayeredFs`) writes its RomFS redirection payload (`romfsredir.s`, 0x114 bytes) to the end
+of `.text` (0x72403C) and its path to the end of `.rodata` (0x79AA18), and hooks
+fsOpenFileDirectly (0x111AA0) and fsTryOpenFile (0x504DB4). The autofit cave was at 0x724040
+and was overwritten. Azahar's LayeredFS patches nothing, so only these checks can catch it:
+
+- `python tests/luma_test.py`: the published zip changes no byte Luma writes or hooks (models
+  Luma's placement in `dq11tool/luma.py`). `patchfile.write_layeredfs_zip` and the tool's
+  LayeredFS export run the same check (the zip writer refuses to write the zip if it fails).
+- `python emutest/lumasim.py [--save none]`: boots the zip in Azahar with `luma.simulate`
+  (payload area = undefined instructions), Continue or New Game, and fails on a crash. With the
+  old layout: "Undefined Instruction" at PC 0x724040, 12 s after boot.
+
+If Luma's payload ever grows past `luma.PAYLOAD_RESERVE` (0x200), update `PAYLOAD_SIZE` from
+the current `romfsredir.s`.
 
 ## Real 3DS: only ARMv6K / VFPv2 instructions in code caves (2026-10-17)
 

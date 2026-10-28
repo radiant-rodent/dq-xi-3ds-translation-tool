@@ -18,16 +18,18 @@ def main():
     from dq11tool import bflyt
     assert (autofit.MARKER, autofit.MARKER_MULTI) == (bflyt.FIT_MARKER, bflyt.FIT_MARKER_MULTI)
     end = autofit.CAVE + len(autofit.CODE)
-    from dq11tool import grammar_code
-    assert end <= grammar_code.CAVE, f"autofit cave ends at {end:#x}, past grammar_code.CAVE"
-    from dq11tool import namefix
-    assert end <= namefix.CAVE, f"autofit cave ends at {end:#x}, past namefix.CAVE"
-    assert namefix.CAVE + len(namefix.CODE) <= namefix.TABLE <= namefix.TABLE_END <= grammar_code.CAVE
-    assert not (autofit.CAVE <= textlog.CAVE < end), "textlog.CAVE inside the autofit cave"
-    from dq11tool import testhook, wordwrap, fontnarrow
-    assert wordwrap.CAVE + len(wordwrap.CODE) <= autofit.SCALE_AT
-    assert autofit.SCALE_AT + len(autofit.SCALE_CODE) <= autofit.SCALE_END <= textlog.CAVE
-    assert testhook.HOOK + len(testhook.CODE) <= autofit.REMAP_AT
+    from dq11tool import grammar_code, namefix, testhook, wordwrap, fontnarrow
+    # test-only code below grammar_code.CAVE (Luma's LayeredFS area, luma.py), release code above
+    assert testhook.HOOK + len(testhook.CODE) <= testhook.PROBE_AREA <= textlog.CAVE
+    assert textlog.CAVE_END <= grammar_code.CAVE
+    for name, (_at, _o, _b, cave, body) in testhook.PROBES.items():
+        assert testhook.PROBE_AREA <= cave and cave + len(body) <= grammar_code.CAVE, name
+    assert grammar_code.CAVE + len(grammar_code.CODE) <= autofit.BITMAP_AT
+    assert autofit.BITMAP_AT + 32 <= wordwrap.CAVE
+    assert wordwrap.CAVE + len(wordwrap.CODE) <= wordwrap.CAVE_END <= autofit.SCALE_AT
+    assert autofit.SCALE_AT + len(autofit.SCALE_CODE) <= autofit.SCALE_END <= autofit.CAVE
+    assert end <= autofit.CAVE_END <= namefix.CAVE, f"autofit cave ends at {end:#x}, past namefix.CAVE"
+    assert namefix.CAVE + len(namefix.CODE) <= namefix.TABLE <= namefix.TABLE_END <= autofit.REMAP_AT
     assert autofit.REMAP_AT + len(autofit.REMAP_CODE) <= autofit.REMAP_END
     assert grammar_code.CAVE + len(grammar_code.CODE) <= autofit.BITMAP_AT
     assert autofit.BITMAP_AT + 32 <= wordwrap.CAVE

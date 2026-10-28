@@ -195,11 +195,17 @@ def write_patch(rom_path: str, out_path: str, romfs_repl: dict[str, bytes],
 
 
 def write_layeredfs_zip(out_path: str, title_id: str, romfs_repl: dict[str, bytes],
-                        code: bytes | None) -> str:
+                        code: bytes | None, rom_path: str) -> str:
     """Luma3DS game patching folder (luma/titles/<title id>/romfs + decompressed code.bin) as a
     zip; deterministic (sorted names, fixed timestamps), so it only changes with the content.
-    Returns its SHA-256."""
+    Refuses a code.bin that Luma's own LayeredFS patching would break (luma.py; rom_path: the
+    original game). Returns its SHA-256."""
     import zipfile
+    if code is not None:
+        from . import luma
+        problems = luma.check_rom(code, rom_path)
+        if problems:
+            raise ValueError("code.bin collides with Luma's LayeredFS patching:\n" + "\n".join(problems))
     entries = [(f"luma/titles/{title_id}/romfs{p}", d) for p, d in sorted(romfs_repl.items())]
     if code is not None:
         entries.append((f"luma/titles/{title_id}/code.bin", code))
@@ -308,7 +314,7 @@ def main(argv=None):
         print(f"\n{a.patch}: version {h['version']}, {len(h['files'])} files")
     if a.layeredfs:
         tid = project.config.get("title_id", "0004000000199200")
-        digest = write_layeredfs_zip(a.layeredfs, tid, romfs_repl, code)
+        digest = write_layeredfs_zip(a.layeredfs, tid, romfs_repl, code, project.rom_path)
         print(f"{a.layeredfs}: sha256 {digest}")
 
 

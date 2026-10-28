@@ -36,7 +36,7 @@ from __future__ import annotations
 
 BASE = 0x100000
 CAVE = 0x724A00
-CAVE_END = 0x724C00          # textlog / debug probes start here
+CAVE_END = 0x724BBC          # autofit.SCALE_AT
 HOOK_AT, ORIGINAL = 0x6F0514, bytes.fromhex("000056e3")     # cmp r6, #0
 HOOK2_AT, ORIGINAL2 = 0x6EFEB4, bytes.fromhex("0c0ad5ed")   # vldr s1, [r5, #0x30]
 

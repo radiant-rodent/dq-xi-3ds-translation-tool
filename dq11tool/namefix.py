@@ -20,9 +20,9 @@ fixed, the exporter only writes the table.
 from __future__ import annotations
 
 BASE = 0x100000
-CAVE = 0x724200            # free .text tail between autofit (0x724040-0x7241FC) and grammar
-TABLE = 0x724320
-TABLE_END = 0x724380       # grammar_code.CAVE (the table needs ~55 bytes; the grammar code outgrew 0x724A00-0x724400)
+CAVE = 0x724DC0            # .text tail after autofit (0x724C00-0x724DBC)
+TABLE = 0x724EE0
+TABLE_END = 0x724F98       # autofit.REMAP_AT (the table needs ~55 bytes)
 CODE_BASE = 0xE010
 MAX_NAMES = 16
 MAX_UNITS = 6              # the save's name field without its NUL
@@ -123,7 +123,7 @@ CODE = bytes.fromhex(
     "fcffff1a011041e2f8ffffea0030a0e30300d2e7000050e301308312fbffff1a000053e32000000a018043e208c086e0"
     "05005ce105c0a0c101004ce2031087e0010050e1070000ba08e040e08ee084e0b0e0dee1801084e0b0e0c1e1031087e0"
     "010040e2f5ffffea0000a0e3030050e1070000aa001087e00c0051e1040000aa00e0d2e7811084e0b0e0c1e1010080e2"
-    "f5ffffea8c0084e00010a0e3b010c0e10c60a0e1037087e0c6ffffea017087e2c4ffffeaf081bde820437200")
+    "f5ffffea8c0084e00010a0e3b010c0e10c60a0e1037087e0c6ffffea017087e2c4ffffeaf081bde8e04e7200")
 
 
 def assemble() -> bytes:

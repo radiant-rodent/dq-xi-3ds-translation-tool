@@ -43,8 +43,8 @@ Which panes are marked is decided by the exporter (Bflyt.mark_fit): panes outsid
 windows (their lines wrap and page on purpose); one-line ones (height below two lines of its
 font) get "fit", taller ones "fim" when their Japanese placeholder fits the box.
 
-Code: SOURCE at CAVE (0x724040-0x724200), REMAP_SOURCE at REMAP_AT (0x724F98-0x725000, after
-testhook's code), the 32-byte BITMAP at 0x7249E0 (after grammar_code); `python -m
+Code: SOURCE at CAVE (0x724C00-0x724DC0), REMAP_SOURCE at REMAP_AT (0x724F98-0x725000, after
+namefix's table), the 32-byte BITMAP at 0x7249E0 (after grammar_code); `python -m
 dq11tool.autofit` reassembles them (keystone) and checks CODE / REMAP_CODE.
 """
 from __future__ import annotations
@@ -56,11 +56,11 @@ RETURN_TO = 0x53F588
 CALC_STRING_WIDTH = 0x713344
 CALC_STRING_RECT = 0x6EFF84                   # (writer, rect out: left, top, right, bottom, str, len)
 MEMCPY = 0x116C10
-CAVE = 0x724040                               # free .text tail (codestr strings live in .rodata)
-CAVE_END = 0x724200                           # namefix.CAVE
-REMAP_AT = 0x724F98                           # after testhook's code (0x724F00 + 152)
+CAVE = 0x724C00                               # .text tail (below 0x724380: test builds only, luma.py)
+CAVE_END = 0x724DC0                           # namefix.CAVE
+REMAP_AT = 0x724F98                           # after namefix's table (namefix.TABLE_END)
 REMAP_END = 0x725000                          # end of .text
-SCALE_AT = 0x724BBC                           # after wordwrap's code, before textlog (0x724C00)
+SCALE_AT = 0x724BBC                           # after wordwrap's code, before CAVE
 SCALE_END = 0x724C00
 RECT_WIDTH_AT = SCALE_AT + 0x34               # rect_width, after scale_writer in SCALE_CODE
 BITMAP_AT = 0x7249E0                          # after grammar_code (ends 0x7249E0), before wordwrap
@@ -311,15 +311,15 @@ def assemble_all() -> dict[str, bytes]:
 
 CODE = bytes.fromhex(
     "9900d4e5660050e34d00001a9a00d4e5690050e36c0050134900001af0472de9068b2ded60d04de298708de2"
-    "a45094e5be6cd4e1000055e3000056133d00000a0080a0e3c30300eb000050e33900000a569a9fed9b00d4e5"
-    "740050e30500000a6d0050e31f00000a308040e2040058e3b803009b2f0000ea7f04a0e3300087e50f8a94ed"
-    "480adfed208a28ee0700a0e10510a0e10620a0e199bcffebc80ab4ee10faf1ee230000da040058e30200000a"
-    "018088e2a70300ebf3ffffea000a88eec90ab4ee10faf1ee490ab0be020ad7ed800a60ee020ac7ed0d0ad7ed"
+    "a45094e5be6cd4e1000055e3000056133d00000a0080a0e3d30000eb000050e33900000a569a9fed9b00d4e5"
+    "740050e30500000a6d0050e31f00000a308040e2040058e3c800009b2f0000ea7f04a0e3300087e50f8a94ed"
+    "480adfed208a28ee0700a0e10510a0e10620a0e1a9b9ffebc80ab4ee10faf1ee230000da040058e30200000a"
+    "018088e2b70000ebf3ffffea000a88eec90ab4ee10faf1ee490ab0be020ad7ed800a60ee020ac7ed0d0ad7ed"
     "800a60ee0d0ac7ed130000ea10aa94ed318a9fed08a0a0e3140000eb0c0000da040058e30200000a018088e2"
-    "920300ebf8ffffea270adfed208a28eec98ab4ee10faf1ee498ab0be010000ba01a05ae2f0ffff1a0700a0e1"
-    "900200eb60d08de2068bbdecf047bde8f80094e5fe6cf8ea01402de908008de20710a0e14820a0e39bcae7eb"
-    "08008de2840200eb08008de250108de20520a0e10630a0e1712fffeb150a9ded170addedc00a30eec00ab0ee"
-    "ca0ab4ee10faf1ee030000ca840200eb0f0ad4ede00ab4ee10faf1ee0180bde848e17a3fcdcc0c3f1f856b3f"
+    "a20000ebf8ffffea270adfed208a28eec98ab4ee10faf1ee498ab0be010000ba01a05ae2f0ffff1a0700a0e1"
+    "a0ffffeb60d08de2068bbdecf047bde8f80094e50e6af8ea01402de908008de20710a0e14820a0e3abc7e7eb"
+    "08008de294ffffeb08008de250108de20520a0e10630a0e1812cffeb150a9ded170addedc00a30eec00ab0ee"
+    "ca0ab4ee10faf1ee030000ca94ffffeb0f0ad4ede00ab4ee10faf1ee0180bde848e17a3fcdcc0c3f1f856b3f"
     "0000803f")
 
 SCALE_CODE = bytes.fromhex(

@@ -118,8 +118,10 @@ def find_strings(code: bytes, text_size: int | None = None) -> list[CodeString]:
 
 
 # The padding after .text (0x72403C..0x725000) is kept for code caves, so moved strings go
-# into the .rodata padding only: 0x724040 autofit.CAVE, 0x724380 grammar.CAVE, 0x724A00-0x724BBC
-# wordwrap, test builds: 0x724C00 textlog.CAVE or testhook probes, 0x724F00 testhook
+# into the .rodata padding only. 0x72403C-0x724380: test builds only (testhook, textlog or
+# probes), as Luma's LayeredFS payload overwrites it on a real 3DS (luma.py); release code:
+# 0x724380 grammar.CAVE, 0x7249E0 autofit.BITMAP_AT, 0x724A00 wordwrap, 0x724BBC autofit.SCALE_AT,
+# 0x724C00 autofit.CAVE, 0x724DC0 namefix (table 0x724EE0), 0x724F98 autofit.REMAP_AT
 RESERVED_TEXT_TAIL = 0x62403C
 
 
@@ -136,7 +138,16 @@ def free_space(code: bytes, exheader: bytes) -> list[list[int]]:
         if i < 2 and start < end and not any(code[start:end]):   # not data: bss follows it
             out.append([start, end])
         off += pages * 0x1000
-    return out
+    from . import luma
+    for a, b, _what in luma.regions(exheader):      # Luma writes its LayeredFS path there
+        a, b = a - luma.BASE, b - luma.BASE
+        for r in out:
+            if r[0] < b and a < r[1]:
+                if a <= r[0]:
+                    r[0] = (b + 3) & ~3
+                else:
+                    r[1] = a
+    return [r for r in out if r[0] < r[1]]
 
 
 def _adr_refs(code: bytes, text_size: int) -> dict[int, list[int]]:

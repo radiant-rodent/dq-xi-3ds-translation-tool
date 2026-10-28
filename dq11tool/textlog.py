@@ -29,10 +29,11 @@ from __future__ import annotations
 import struct
 
 BASE = 0x100000
-# in the debug probe area (testhook.PROBE_AREA, 0x724C00..testhook.HOOK): a test build has
-# either the text log or the heap probes (autofit.CAVE took the room below grammar_code.CAVE)
-CAVE = 0x724C00
-CAVE_END = 0x724F00
+# in the debug probe area (testhook.PROBE_AREA, after testhook's code, up to grammar_code.CAVE):
+# a test build has either the text log or the heap probes. Test builds only: Luma's LayeredFS
+# payload goes there on a real 3DS (luma.py)
+CAVE = 0x7240D8
+CAVE_END = 0x724380
 CTL = 0x839F20
 FRAME = 0x839F10             # testhook.MAILBOX + 16: hook read counter (one per frame)
 HID_TICK = 0x10002000

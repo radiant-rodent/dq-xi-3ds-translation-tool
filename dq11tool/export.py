@@ -1027,6 +1027,9 @@ def run_export(project: Project, out_dir: str, opts: ExportOptions, progress=Non
             os.makedirs(tdir, exist_ok=True)
             with open(os.path.join(tdir, "code.bin"), "wb") as fp:
                 fp.write(code_out)   # Luma expects the decompressed code
+            from . import luma       # Luma patches code.bin as it loads it: nothing of ours may be there
+            report.warnings.extend({"entry": None, "text": "layeredfs code.bin", "problem": p}
+                                   for p in luma.check_rom(code_out, project.rom_path))
         report.outputs["layeredfs"] = lroot
         progress("Writing LayeredFS patch", 1, 1)
 
