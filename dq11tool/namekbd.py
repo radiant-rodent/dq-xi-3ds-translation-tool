@@ -28,6 +28,8 @@ PER_PAGE = 69
 COMMANDS = (63, 64, 65)              # page switch, delete, done (column 11, rows 4-6)
 TEXTURES = ("timg/win_keyboard_3d.bflim", "timg/win_keyboardB_3d.bflim")
 TITLE_PACK = "/ui/title.pack"
+# other copies of the keyboard (the same table types into them): renaming, Save Code entry...
+KEYBOARD_PACKS = ("/ui/common_2way.pack", "/ui/common_3d.pack", "/ui/dive_dugeon_2way.pack", "/ui/stpass_3d.pack")
 
 # visual layout: 6 rows x 12 columns, "" = command key area
 # The title's Save Code entry uses this keyboard too (page 1 only): page 1 holds every
@@ -257,11 +259,13 @@ def draw_page(tex: bytes, font: Font, rows: list[str], labels: tuple, boxes=()) 
     return _encode(L, A) + tex[_W * _H:]
 
 
-def patch_title_pack(pack_data: bytes, font_data: bytes, accents: list[str] | None) -> bytes:
+def patch_pack(pack_data: bytes, font_data: bytes, accents: list[str] | None) -> bytes | None:
+    """The pack with its keyboard textures redrawn, or None if it has none."""
     from .darc import Sarc
     from .pack import Pack
     font = Font(font_data)
     pack = Pack.parse(pack_data)
+    changed = False
     for e in pack.entries:
         if e.data[:4] != b"SARC":
             continue
@@ -276,8 +280,15 @@ def patch_title_pack(pack_data: bytes, font_data: bytes, accents: list[str] | No
             raw = sarc.raw[sarc.data_offset + n.start:sarc.data_offset + n.end]
             repl[name] = draw_page(raw, font, rows, labels, JUMON_BOXES if k == 0 else ())
         e.data = sarc.rebuild(repl)
-        return pack.build()
-    raise ValueError("name-entry keyboard textures not found in title.pack")
+        changed = True
+    return pack.build() if changed else None
+
+
+def patch_title_pack(pack_data: bytes, font_data: bytes, accents: list[str] | None) -> bytes:
+    out = patch_pack(pack_data, font_data, accents)
+    if out is None:
+        raise ValueError("name-entry keyboard textures not found in title.pack")
+    return out
 
 
 def supported(fonts: dict[str, bytes]) -> set[str]:

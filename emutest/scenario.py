@@ -227,19 +227,19 @@ def set_lineup(d: bytearray, spec: str) -> None:
             d[GLOBAL_FLAGS_AT + (332 if r == 27 else 324 + r)] = 1
 
 
-def make_save(mode: str, gold: int | None = None, rename: str = "", lineup: str = ""):
-    """The run's save: a copy of the mode's base save (checked: its mode byte matches),
+def make_save(mode: str, gold: int | None = None, rename: str = "", lineup: str = "", base: str | None = None):
+    """The run's save: a copy of the mode's base save, or `base` (checked: its mode byte matches),
     optionally with more gold (there is no script call that adds gold), renamed members and
     another party line-up."""
     import roomscan
     dst = os.path.join(az.SAVES, RUN_SAVE)
     if os.path.isdir(dst):
         shutil.rmtree(dst)
-    shutil.copytree(os.path.join(az.SAVES, SAVES[mode]), dst)
+    shutil.copytree(os.path.join(az.SAVES, base or SAVES[mode]), dst)
     p = os.path.join(dst, "00000001", "Data0")
     d = bytearray(open(p, "rb").read())
     if d[MODE_AT] != MODES[mode]:
-        raise RuntimeError(f"save {SAVES[mode]} is in display mode {d[MODE_AT]}, not {mode}")
+        raise RuntimeError(f"save {base or SAVES[mode]} is in display mode {d[MODE_AT]}, not {mode}")
     if gold is not None:
         for at in GOLD_AT:
             struct.pack_into("<I", d, at, gold)
@@ -372,7 +372,7 @@ def run(a) -> int:
         # inn: the priest charges 999 G; 5000 G or more on load earns the "Gold Magnet"
         # accolade (a popup at spawn), so stay below
         gold = a.gold if a.gold is not None else (4999 if a.kind == "inn" else None)
-        make_save(a.mode, gold, a.rename, a.lineup)
+        make_save(a.mode, gold, a.rename, a.lineup, a.base)
         meta["gold"] = gold if gold is not None else "save (57)"
         if os.path.exists(azctl.STATE) and _alive():
             azctl.main(["stop"])
@@ -459,6 +459,7 @@ def parser():
     ap.add_argument("--gold", type=int, default=None, help="gold in the save (inn: 4999; >= 5000 earns an accolade at load)")
     ap.add_argument("--lineup", default="", help="party line-up in the save: record numbers, e.g. 0,1,2,3 (Hero Erik Veronica Serena)")
     ap.add_argument("--rename", default="", help="stored member names OLD=NEW,... (NEW longer than 6: its namefix code)")
+    ap.add_argument("--base", default=None, help="base save in _emutest/saves instead of the mode's (e.g. azpro_data0, 2way)")
     ap.add_argument("--keep", action="store_true", help="leave the emulator running")
     ap.add_argument("--pure-code", action="store_true", help="bisect: unpatched executable (test hook, text log, grammar pass)")
     ap.add_argument("--burst", type=int, default=0, help="screenshots every 0.4 s after the talk (N shots)")

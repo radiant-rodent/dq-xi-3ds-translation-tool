@@ -1,6 +1,7 @@
 """Apply translations from a project to the game files and build output images."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -94,6 +95,12 @@ class ExportOptions:
     reflow_battle: bool = True
     # Japanese text drawn into textures redrawn in English (texlabel.py)
     texture_labels: bool = True
+    # ... with the PC version's official English artwork where it has one (pctex.py, read from the
+    # Steam install: the PC import's path or the default one; skipped when it is missing)
+    pc_textures: bool = True
+    # hand-edited textures: <workspace>/texture_edits/<texture>.png (same size as the 3DS one,
+    # e.g. coinget_font_3d.png) and tutorial_XXXX.png for the tutorial pictures; used as they are
+    texture_edits: bool = True
     # title logo with the official English subtitle (logo.py, from dq11tool/data/logo_en.png)
     title_logo: bool = True
     # field map place labels: one English name per label instead of one per fragment (maplabel.py)
@@ -316,17 +323,27 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
         if opts.texture_labels:
             from . import texlabel
             tfont = romfs_repl.get(f"/font/{texlabel.FONT}.bffnt") or romfs.read_file(files[f"/font/{texlabel.FONT}.bffnt"])
+            sfont = romfs_repl.get(f"/font/{texlabel.SMALL_FONT}.bffnt") or romfs.read_file(files[f"/font/{texlabel.SMALL_FONT}.bffnt"])
+            official, edits, tutorial_edits = _texture_sources(project, opts, report)
             for path in files:
                 if not (path.startswith("/ui/") and path.endswith(".pack")) or path in overrides:
                     continue
                 if path.rsplit("/", 1)[-1] not in texlabel.PACKS:
                     continue
                 data = romfs_repl.get(path) or romfs.read_file(files[path])
-                new = texlabel.patch_pack(data, tfont)
+                new = texlabel.patch_pack(data, tfont, sfont, official=official, edits=edits)
                 if new is not None:
                     romfs_repl[path] = new
                     if path not in report.files_changed:
                         report.files_changed.append(path + " (images)")
+            if tutorial_edits:
+                from . import bchtex
+                for path in files:
+                    stem = path.rsplit("/", 1)[-1][:-4]
+                    if path.startswith("/ui/tutorial/") and stem in tutorial_edits:
+                        data = romfs.read_file(files[path])
+                        romfs_repl[path] = bchtex.replace(data, bchtex.textures(data)[0], tutorial_edits[stem])
+                        report.files_changed.append(path + " (edited picture)")
             banners = {p.rsplit("/", 1)[-1]: p for p in files
                        if p.startswith("/ui/location/") and p.endswith(".bch") and p not in overrides}
             new = texlabel.patch_banners({n: romfs.read_file(files[p]) for n, p in banners.items()}, tfont)
@@ -441,6 +458,12 @@ def _latin_keyboard(code: bytes, romfs, files, romfs_repl: dict, report: ExportR
     romfs_repl[pack_path] = namekbd.patch_title_pack(pack, font, accents)
     if pack_path + " (Latin keyboard)" not in report.files_changed:
         report.files_changed.append(pack_path + " (Latin keyboard)")
+    for path in namekbd.KEYBOARD_PACKS:
+        if path not in files:
+            continue
+        new = namekbd.patch_pack(romfs_repl.get(path) or romfs.read_file(files[path]), font, accents)
+        if new is not None:
+            romfs_repl[path] = new
     return patched
 
 
@@ -990,6 +1013,38 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
     if not changed:
         return None
     return pack.build()
+
+
+def _texture_sources(project: Project, opts: ExportOptions, report: ExportReport):
+    """(official PC artwork or None, {texture: hand-edited RGBA}, {tutorial: hand-edited RGBA})."""
+    import numpy as np
+    from PIL import Image
+    official = None
+    if opts.pc_textures:
+        from . import pcref, pctex
+        try:
+            row = project.db().execute("SELECT value FROM meta WHERE key='pc_path'").fetchone()
+        except Exception:
+            row = None
+        root = (json.loads(row[0]) if row and row[0] else None) or pcref.DEFAULT_PC_PATH    # stored as JSON
+        try:
+            official = pctex.official(pctex.PcTextures(root))
+        except (OSError, KeyError, ValueError) as e:
+            report.warnings.append({"entry": None, "text": "PC artwork",
+                                    "problem": f"PC version not readable ({e}); casino and race signs drawn instead"})
+    edits, tutorials = {}, {}
+    folder = os.path.join(project.workdir, "texture_edits")
+    if opts.texture_edits and os.path.isdir(folder):
+        for f in sorted(os.listdir(folder)):
+            if not f.lower().endswith(".png"):
+                continue
+            rgba = np.asarray(Image.open(os.path.join(folder, f)).convert("RGBA"))
+            stem = f[:-4]
+            if stem.startswith("tutorial_"):
+                tutorials[stem] = rgba
+            else:
+                edits[f"timg/{stem}.bflim"] = rgba
+    return official, edits, tutorials
 
 
 def run_export(project: Project, out_dir: str, opts: ExportOptions, progress=None) -> ExportReport:
