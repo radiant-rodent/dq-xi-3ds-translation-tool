@@ -10,7 +10,8 @@ stores every talk as an array of 28-byte line records:
 
 Tree: root[] (24 B) +0x08 -> talks[] (16 B) +0x00 -> variants[] (12 B) +0x00 -> lines[].
 A line whose text contains U+001F (textcodec.PAGE) becomes several consecutive records: the
-first keeps everything, the others get the same speaker and flags and no per-line data. The
+first keeps the per-line data, the last the question / window that follows the line, all
+get the same speaker. The
 new line array and the new strings are appended to the file, the variant's (count, relptr)
 is re-pointed and the indexes are renumbered.
 
@@ -25,6 +26,11 @@ from .bxon import MARK
 from .textcodec import PAGE
 
 LINE = 28
+# +0x08 u8 UI type: 7 and up open a window after the line (code.bin IEGetUIType switches on
+# type - 7: inn, ship, medals, quests...). +0x0A u16 options: bit 0 = another box follows,
+# bit 1 = yes/no question (IECheckOption(text, 2)).
+UI_OPENS = 7
+OPT_NEXT, OPT_YESNO = 1, 2
 _PAGE16 = PAGE.encode("utf-16-le")
 
 
@@ -150,19 +156,20 @@ def split_pages(data: bytes) -> tuple[bytes, int]:
         plan = []
         for p, parts in recs:
             if len(parts) == 1:
-                plan.append((p, None, True))
+                plan.append((p, None, True, True))
                 continue
             text_at = _target(data, p + 0x14)
             if text_at not in placed:
                 placed[text_at] = _place(out, data, text_at, parts, shared)
-            for k, at in enumerate(placed[text_at]):
-                plan.append((p, at, k == 0))
+            pages = placed[text_at]
+            for k, at in enumerate(pages):
+                plan.append((p, at, k == 0, k == len(pages) - 1))
         while len(out) % 4:
             out += b"@"
         out += MARK
         new_base = len(out)
         out += b"\0" * (LINE * len(plan))
-        for idx, (src, text_at, first) in enumerate(plan):
+        for idx, (src, text_at, first, last) in enumerate(plan):
             q = new_base + LINE * idx
             rec = bytearray(data[src:src + LINE])
             # self-relative pointers: keep the old targets from the new position
@@ -174,6 +181,13 @@ def split_pages(data: bytes) -> tuple[bytes, int]:
                     struct.pack_into("<I", rec, f, (t - (q + f)) & 0xFFFFFFFF)
             if not first:
                 struct.pack_into("<II", rec, 0, 0, 0)       # gestures stay on the first box
+            if not last:
+                # what happens after the line (yes/no question, shop or inn window) happens
+                # after its last box; the others only continue to the next box (issue #1)
+                if rec[0x08] >= UI_OPENS:
+                    rec[0x08] = 0
+                opt = struct.unpack_from("<H", rec, 0x0A)[0]
+                struct.pack_into("<H", rec, 0x0A, (opt | OPT_NEXT) & ~OPT_YESNO)
             if text_at is not None:
                 struct.pack_into("<I", rec, 0x14, (text_at - (q + 0x14)) & 0xFFFFFFFF)
             struct.pack_into("<I", rec, 0x0C, idx)

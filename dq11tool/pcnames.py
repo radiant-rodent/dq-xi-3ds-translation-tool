@@ -49,12 +49,13 @@ def plan(project) -> tuple[list[tuple[int, str, str]], Counter]:
 
 def plan_labels(project) -> tuple[list[tuple[int, str, str]], Counter]:
     """Layout labels (gamefont.label_only): the exact PC term when it fits the pane with the
-    exporter's glyph narrowing (gamefont.LABEL_SQUEEZE)."""
+    exporter's glyph narrowing (gamefont.LABEL_SQUEEZE). Reviewed strings are kept: short
+    labels such as やめる have false exact matches ("I don't want\\nanything.", issue #5)."""
     gf = gamefont.for_project(project)
     rows = project.db().execute(
         "SELECT s.id, s.text, s.translation, m.en FROM source s"
         " JOIN pc_match m ON m.source_id = s.id AND m.rank = 0 AND m.kind = 'exact'"
-        " WHERE s.translation IS NOT NULL AND s.translation != ''").fetchall()
+        " WHERE s.translation IS NOT NULL AND s.translation != '' AND s.status < 3").fetchall()
     changes, stats = [], Counter()
     for sid, src, tr, en in rows:
         if not gf.label_only(sid):

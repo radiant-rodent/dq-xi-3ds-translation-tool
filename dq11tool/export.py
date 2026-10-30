@@ -597,7 +597,17 @@ PANE_GEOMETRY = {
         {"win": 115.0, "line": 115.0, "txt_title": 85.0},
         {"null_win_sort3": -15.0, "txt_title": 19.5, "txt": 7.5, "icon_key_r": 15.0},
     ),
+    # field prompt ("[Y]:Action", "[A]:Help"): the A/Y icon covers x 9-25 and the text began
+    # at x 23 / 25, where the Japanese full-width colon was mostly blank; ":Action" ran under
+    # the icon (eggsoskeleton in Kingsbarrow, issue #3). The text starts 3-4 px right of the
+    # icon; the 2D window (right edge at screen x 316) grows 8 px to the left for it
+    "win_operation_3d": ({"txt_l1": 50.0}, {"txt_l1": 5.0}),
+    "win_operation_2d": ({"win": 86.0}, {"null_win_operation": -8.0, "txt_l1": 4.0}),
 }
+# Text boxes the runtime fit scales although their Japanese placeholder overflows them
+# (Bflyt.force_multi). 2D Pep Power description: 4 lines of placeholder in a 3-line 81x50 pane,
+# so box_holds never marked it and the descriptions ran out of the window (issue #4)
+FIT_MULTI_PANES = {"win_renkei3_2d": {"txt_l1"}}
 
 
 # descriptions only: the field menu's message window does not wrap at runtime (a reflowed
@@ -943,6 +953,7 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
                 if fit:
                     lay.mark_fit = set(FIT_EXCLUDE_PANES)
                     lay.mark_multi = opts.runtime_fit_multi
+                    lay.force_multi = FIT_MULTI_PANES.get(base, set())
                     lay.narrow_fit = True
                 lay.squeeze = squeeze.get(n.name, {})
                 lay.crisp = crisp.get(n.name, set())

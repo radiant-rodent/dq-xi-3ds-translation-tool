@@ -120,6 +120,7 @@ class Bflyt:
         # one-line text pane gets the user data FIT_MARKER, a box FIT_MARKER_MULTI
         self.mark_fit: set[str] | None = None
         self.mark_multi = True
+        self.force_multi: set[str] = set()   # boxes marked FIT_MARKER_MULTI although box_holds says no
         self.narrow_fit = False     # the runtime fit switches to narrow glyphs: no static squeeze there
 
     def _fonts(self) -> list[str]:
@@ -217,7 +218,7 @@ class Bflyt:
                             struct.pack_into("<f", sec, 0x4C, cw)
                             if dx:
                                 struct.pack_into("<f", sec, 0x2C, struct.unpack_from("<f", sec, 0x2C)[0] + dx)
-                    elif self.mark_multi and box_holds(d[off:off + sz]):
+                    elif self.mark_multi and (box_holds(d[off:off + sz]) or pname in self.force_multi):
                         sec[0x24:0x2C] = FIT_MARKER_MULTI.ljust(8, b"\0")
             if m == b"txt1":
                 # a pane the runtime fit narrows (with narrow glyphs, autofit.py) keeps its font
