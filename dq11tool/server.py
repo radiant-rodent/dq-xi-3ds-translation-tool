@@ -347,11 +347,13 @@ def create_app(workdir: str) -> Flask:
                  box_auto_width=box["auto_width"], box_auto_lines=box["auto_lines"],
                  help_window=box["help_window"], help_max=box["help_max"])
         d["bubble"] = r["id"] in gf.bubbles()
+        d["reflow"] = gf.reflowed(r["id"])
         if gf.source_font(r["id"]) == gamefont.MESSAGE_FONT and not gf.name_field(r["id"]):
             # the 2D-mode message windows (top screen 1:1, lower screen condensed): same line width
             d["windows_2d"] = [{"font": f, "width": w} for f, w in gamefont.MESSAGE_2D]
         if r["translation"]:
-            tm = measure(r["translation"], font)
+            shown = gf.runtime_text(r["id"], r["text"], r["translation"])
+            tm = measure(shown, font)
             problems = validate(r["text"], r["translation"], r["origin"] == "pc" if "origin" in r.keys() else False)
             missing = sorted({c for c in r["translation"] if ord(c) >= 0x20 and ord(c) not in font.cmap})
             if missing:
@@ -361,11 +363,18 @@ def create_app(workdir: str) -> Flask:
                 if need > cap:
                     problems.append(f"too long for this executable slot: max {cap // 2 - 1} characters")
             too_wide = tm["max_width"] > box["width"]
-            too_many = tm["lines"] > box["lines"]
+            if d["bubble"]:
+                # a bubble line wider than its 130 px pane is narrowed by the game: say how much
+                from . import bubble as _bub
+                too_wide = False
+                problems.extend(p for p in _bub.problems(r["translation"], font) if "slightly squeezed" not in p)
+            # {PAGE} starts another message box: the lines of the longest box count
+            page_lines = max(measure(pg, font)["lines"] for pg in shown.split("{PAGE}"))
+            too_many = page_lines > box["lines"]
             if too_wide:
                 problems.append(f"too wide for its window ({tm['max_width']}px > {box['width']}px)")
             if too_many:
-                problems.append(f"more lines than its window has ({tm['lines']} > {box['lines']})")
+                problems.append(f"more lines than its window has ({page_lines} > {box['lines']})")
             if not (too_wide or too_many) and not gf.fits(r["id"], r["text"], r["translation"]):
                 too_wide = True
                 problems.append("too wide for the 2D-mode message window")

@@ -18,6 +18,8 @@ from .bffnt import Bffnt
 from .ctr.formats import open_image
 
 _TAG = re.compile(r"(\{\{|\}\}|\{[^{}]*\})")
+# {v:66} .. {v:64} wrap a note ("※ Press Y ..."): text style switches, not variables
+STYLE_CODES = frozenset({"66", "64"})
 VAR_WIDTH_CHARS = 8          # assumed length of a runtime variable (name, item...)
 
 
@@ -79,9 +81,12 @@ def _visible_units(text: str):
                 for c in base:
                     yield "ch", c
             elif tag.startswith("v:"):
-                yield "var", part
+                if tag[2:] not in STYLE_CODES:      # a style marker has no width, a variable does
+                    yield "var", part
             elif tag == "CR":
                 yield "page", ""
+            elif tag == "PAGE":
+                yield "nl", ""          # the next message box starts a new line (its width counts alone)
             # other control codes are invisible
         else:
             for c in part:

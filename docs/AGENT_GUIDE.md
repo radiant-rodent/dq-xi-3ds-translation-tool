@@ -695,3 +695,24 @@ cannot catch this. Never use movw/movt, ubfx/sbfx/bfi/bfc, sdiv/udiv, mls, rbit,
 (`vmov.f32 sN, #x` - load a `.float` literal with vldr instead) or fixed-point vcvt. After any
 cave change run `python emutest/armv6check.py workspace/extracted/exefs/code.decompressed.bin
 _emutest/azahar/user/load/mods/0004000000199200/exefs/code.bin` (ldrd hits are literal-pool data).
+
+## Speech bubbles, line breaks, hobbies, heart (2026-10-31)
+
+- **Bubbles over NPC heads** (`dq11tool/bubble.py`): CharacterIEData has a second array per root
+  entry (root +0x10 count, +0x14 relptr; 12-byte records, text relptr at +4) with the one-liners NPCs
+  say over their heads. The bubble code (code.bin 0x5F8AB8) breaks a text of more than 8 characters
+  without U+000A after the 8th character, mid-word. `bubble.layout` writes a break (2 lines, 130 px of
+  3D12, hud_balloon_3d.bflyt txt1-4); the exporter applies `export_text` per entry. Window size by
+  length: `balloon1_N` animations, one line 12*N+8 x 22 px, two lines 128 x 34. `balloon2_*` is a
+  spiky (shout) style whose trigger is not known. `python -m dq11tool.bubble [--apply]`.
+- **Line breaks** (`dq11tool/linebreak.py`, dry run unless `--apply`): re-breaks multi-line texts of the
+  dialogue windows without changing words: a break at a sentence end / comma is preferred, one
+  sentence with an early break is re-filled, the line count never grows, `{CR}` stays at line ends,
+  strings with origin "manual" are left alone.
+- **Dialogue-window tables** (`gamefont.TALK_WINDOW_TABLES`): UI message tables shown in the 321 px /
+  3 line dialogue box (hat shop, casino prizes, spirits ...); the editor sized them from the Japanese.
+- **Profile rows** (`*_lw_dive` layouts, `export.PROFILE_LABEL_MAX`, `Bflyt.text_px`): a long right
+  aligned value is kept clear of its label's real text width.
+- **Heart** (`fontcompose._heart`): drawn glyph U+2665 in every font with more than 1000 glyphs
+  (checked in game, 2D and 3D, with `scenario.py church` and `tempdb.overrides`).
+- `{v:66}` / `{v:64}` are text style markers (width 0), `{PAGE}` is a line break for measuring.

@@ -437,8 +437,21 @@ function loadFont(name) {
   return state.fonts[name];
 }
 
+// Grammar tags the game fills in at runtime, as the widest reading (textcodec.resolve_grammar):
+// {n:a|b} / {s:a|b} -> the longer branch, {the} -> "the ", {a} -> "an ", {pl} -> "es"
+function resolveGrammar(text) {
+  text = text.replace(/\{[ns]:((?:[^{}|]|\{[^{}]*\})*)\|((?:[^{}]|\{[^{}]*\})*)\}/g, (m, a, b) => (b.length > a.length ? b : a));
+  for (const [tag, rep] of [["{the}", "the "], ["{The}", "The "], ["{a}", "an "], ["{A}", "An "], ["{pl}", "es"], ["{noun}", ""], ["{grp}", ""]])
+    text = text.split(tag).join(rep);
+  return text;
+}
+
+// {PAGE} starts the next message box: every page is laid out (and checked) on its own
+const layoutPages = (text, font) => (text || "").split("{PAGE}").map((p) => layout(p, font));
+
 function layout(text, font) {
   // -> lines of units: {ch} | {v} | {wait}; {CR} is a "wait for button" marker, not a line break
+  text = resolveGrammar(text || "");
   const lines = [[]];
   const re = /\{\{|\}\}|\{([^{}]*)\}|\n|[\s\S]/g;
   let m;
@@ -451,7 +464,7 @@ function layout(text, font) {
       const tag = m[1];
       if (tag === "CR") line.push({ wait: true });
       else if (tag.startsWith("ruby:")) for (const c of tag.slice(5).split("|")[0]) line.push({ ch: c });
-      else if (tag.startsWith("v:")) line.push({ v: tag.slice(2) });
+      else if (tag.startsWith("v:")) { if (tag !== "v:66" && tag !== "v:64") line.push({ v: tag.slice(2) }); }   // 66 / 64: style markers, no width
       continue;
     }
     line.push({ ch: t });
@@ -478,44 +491,53 @@ async function drawPreview(text, srcText, box, canvasId = "#preview", fontName =
   // a fixed window (2D mode) is not sized like the Japanese text
   const boxW = box && box.fixed ? box.width : Math.max(box && box.width || 0, ...srcLines.map((l) => lineWidth(font, l)), 60);
   const boxLines = Math.max(box && box.lines || 0, srcLines.length, 1);
-  const lines = layout(text, font);
-  const lh = font.line_feed + 2, pad = 8, scale = 2;
-  const shown = Math.max(lines.length, boxLines);
-  const totalW = Math.max(boxW, ...lines.map((l) => lineWidth(font, l))) + pad * 2 + 24;
-  const totalH = shown * lh + pad * 2 + 4;
+  const pages = layoutPages(text, font);               // {PAGE}: one message box per page
+  const lh = font.line_feed + 2, pad = 8, scale = 2, gap = 14;
+  const boxH = boxLines * lh + pad * 2 - 2;
+  const pageH = (pg) => Math.max(pg.length, boxLines) * lh + pad * 2 + 4;
+  const totalW = Math.max(boxW, ...pages.flat().map((l) => lineWidth(font, l))) + pad * 2 + 24;
+  const totalH = pages.reduce((a, pg) => a + pageH(pg) + (pages.length > 1 ? gap : 0), 0);
   canvas.width = totalW * scale;
   canvas.height = totalH * scale;
   canvas.style.width = (totalW * scale) + "px";
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = false;
   ctx.scale(scale, scale);
-  // message window sized like the original text
-  ctx.fillStyle = "#0b0d16"; ctx.strokeStyle = "#e9e9f2"; ctx.lineWidth = 1.5;
-  roundRect(ctx, 1, 1, boxW + pad * 2, boxLines * lh + pad * 2 - 2, 5); ctx.fill(); ctx.stroke();
-  lines.forEach((line, li) => {
-    let x = pad;
-    const y = pad + li * lh;
-    const lw = lineWidth(font, line);
-    for (const u of line) {
-      if (u.wait) {  // the blinking "next" arrow
-        ctx.fillStyle = "#e8b84a";
-        ctx.beginPath(); ctx.moveTo(x + 2, y + 6); ctx.lineTo(x + 8, y + 6); ctx.lineTo(x + 5, y + 10); ctx.fill();
-        continue;
-      }
-      if (u.v !== undefined) {
-        const w = glyphWidth(font, u);
-        ctx.fillStyle = "#6b4fb0"; ctx.fillRect(x, y + 2, w - 2, font.height - 4);
-        ctx.fillStyle = "#fff"; ctx.font = "9px sans-serif"; ctx.fillText("◆" + u.v, x + 2, y + font.height - 5);
-        x += w; continue;
-      }
-      const g = font.glyphs[u.ch.codePointAt(0)];
-      if (!g) { ctx.fillStyle = "#e86a5a"; ctx.fillRect(x, y, font.cell_w - 2, font.height); x += font.cell_w; continue; }
-      const [sheet, sx, sy, left, gw, cw] = g;
-      if (gw) ctx.drawImage(font.images[sheet], sx, sy, gw, font.cell_h, x + left, y, gw, font.cell_h);
-      x += cw;
+  let top = 0;
+  pages.forEach((lines, pi) => {
+    if (pi) {                                          // between two boxes: the player presses A
+      ctx.fillStyle = "#8a8da0"; ctx.font = "9px sans-serif";
+      ctx.fillText("▼ next box " + (pi + 1), 4, top - 3);
     }
-    if (lw > boxW) { ctx.fillStyle = "rgba(232,106,90,.4)"; ctx.fillRect(pad + boxW, y, lw - boxW, lh - 2); }
-    if (li >= boxLines) { ctx.fillStyle = "rgba(232,106,90,.25)"; ctx.fillRect(1, y, Math.max(lw, boxW) + pad * 2, lh - 1); }
+    // message window sized like the original text
+    ctx.fillStyle = "#0b0d16"; ctx.strokeStyle = "#e9e9f2"; ctx.lineWidth = 1.5;
+    roundRect(ctx, 1, top + 1, boxW + pad * 2, boxH, 5); ctx.fill(); ctx.stroke();
+    lines.forEach((line, li) => {
+      let x = pad;
+      const y = top + pad + li * lh;
+      const lw = lineWidth(font, line);
+      for (const u of line) {
+        if (u.wait) {  // the blinking "next" arrow
+          ctx.fillStyle = "#e8b84a";
+          ctx.beginPath(); ctx.moveTo(x + 2, y + 6); ctx.lineTo(x + 8, y + 6); ctx.lineTo(x + 5, y + 10); ctx.fill();
+          continue;
+        }
+        if (u.v !== undefined) {
+          const w = glyphWidth(font, u);
+          ctx.fillStyle = "#6b4fb0"; ctx.fillRect(x, y + 2, w - 2, font.height - 4);
+          ctx.fillStyle = "#fff"; ctx.font = "9px sans-serif"; ctx.fillText("◆" + u.v, x + 2, y + font.height - 5);
+          x += w; continue;
+        }
+        const g = font.glyphs[u.ch.codePointAt(0)];
+        if (!g) { ctx.fillStyle = "#e86a5a"; ctx.fillRect(x, y, font.cell_w - 2, font.height); x += font.cell_w; continue; }
+        const [sheet, sx, sy, left, gw, cw] = g;
+        if (gw) ctx.drawImage(font.images[sheet], sx, sy, gw, font.cell_h, x + left, y, gw, font.cell_h);
+        x += cw;
+      }
+      if (lw > boxW) { ctx.fillStyle = "rgba(232,106,90,.4)"; ctx.fillRect(pad + boxW, y, lw - boxW, lh - 2); }
+      if (li >= boxLines) { ctx.fillStyle = "rgba(232,106,90,.25)"; ctx.fillRect(1, y, Math.max(lw, boxW) + pad * 2, lh - 1); }
+    });
+    top += pageH(lines) + gap;
   });
 }
 
@@ -529,23 +551,30 @@ async function updateLive() {
   if (!d || !$("#tr")) return;
   const font = await loadFont(state.previewFont);
   if (state.detail !== d || !$("#tr")) return;   // another string was selected meanwhile
-  const text = $("#tr").value;
+  let text = $("#tr").value;
   if (d.bubble) return updateBubble(d, text);
-  const srcLines = layout(d.text, font), lines = layout(text, font);
+  if (d.reflow && text && !/\{(CR|PAGE)\}/.test(text)) {
+    // skill / spell / item descriptions: the export drops the line breaks and the game wraps the text to the box
+    const w = await api("/api/wrap", { json: { text: text.replace(/ *\n */g, " "), source: d.text, id: d.id } });
+    if (state.detail !== d || !$("#tr")) return;
+    text = w.text;
+  }
+  const srcLines = layout(d.text, font), pages = layoutPages(text, font), lines = pages.flat();
+  const nLines = Math.max(...pages.map((p) => p.length));    // the box shows one page at a time
   const sw = Math.max(...srcLines.map((l) => lineWidth(font, l)));
   const tw = Math.max(...lines.map((l) => lineWidth(font, l)));
   const boxW = d.box_width || Math.max(sw, 40), boxL = d.box_lines || srcLines.length;
   const chars = text.replace(/\{[^{}]*\}/g, "").length;
   const capInfo = d.capacity ? `<span class="${chars > d.capacity / 2 - 1 ? "over" : ""}">limit <b>${d.capacity / 2 - 1}</b> chars</span>` : "";
   $("#stats").innerHTML = `<span title="widest line of the translation / width of the window this text is shown in (Japanese: ${sw}px)">width <b class="${tw > boxW ? "over" : ""}">${text ? tw : 0}px</b> / ${boxW}px</span>
-    <span>lines <b class="${text && lines.length > boxL ? "over" : ""}">${text ? lines.length : 0}</b> / ${boxL}</span>
+    <span title="lines of the longest box${pages.length > 1 ? "; {PAGE} splits the text into boxes" : ""}">lines <b class="${text && nLines > boxL ? "over" : ""}">${text ? nLines : 0}</b> / ${boxL}</span>${pages.length > 1 ? `<span title="{PAGE}: the player presses A for the next box">${pages.length} boxes</span>` : ""}
     <span title="rough budget the auto-translation aims for">${chars} / ~${d.max_chars || "?"} chars</span>${capInfo}`;
   drawPreview(text, d.text, { width: boxW, lines: boxL });
   const probs2d = [];
   for (const w of d.windows_2d || []) {
     drawPreview(text, d.text, { width: w.width, lines: boxL, fixed: true }, "#preview2d", w.font);
     const f2 = await loadFont(w.font);
-    const w2 = text ? Math.max(...layout(text, f2).map((l) => lineWidth(f2, l))) : 0;
+    const w2 = text ? Math.max(...layoutPages(text, f2).flat().map((l) => lineWidth(f2, l))) : 0;
     if (w2 > w.width) probs2d.push(`too wide for the 2D-mode message window (${w2}px > ${w.width}px)`);
   }
   // client-side checks (the server validates on save too)
@@ -558,7 +587,7 @@ async function updateLive() {
     const missingGlyphs = [...new Set([...text.replace(/\{[^{}]*\}/g, "")].filter((c) => c !== "\n" && !font.glyphs[c.codePointAt(0)]))];
     if (missingGlyphs.length) probs.push("characters not in the game font: " + missingGlyphs.join(" "));
     if (tw > boxW) probs.push(`too wide for its window (${tw}px > ${boxW}px)`);
-    if (lines.length > boxL) probs.push(`more lines than its window has (${lines.length} > ${boxL})`);
+    if (nLines > boxL) probs.push(`more lines than its window has (${nLines} > ${boxL})`);
     probs.push(...probs2d);
   }
   updateProblems(probs);

@@ -34,7 +34,9 @@ _LIGATURES = {"Æ": "AE", "æ": "ae", "Œ": "OE", "œ": "oe"}
 _SLASHED = {"Ø": "O", "ø": "o"}
 _TURNED = {"¡": "!", "¿": "?"}
 
-VERSION = 1             # bump when the composed glyphs change (font cache key)
+SYMBOLS = "♥"     # drawn, not composed: a heart (the game fonts only have the note and the star)
+
+VERSION = 2             # bump when the composed glyphs change (font cache key)
 CORE = 12               # pixel value from which a pixel counts as the glyph's stroke
 
 
@@ -105,7 +107,46 @@ def _squash(cv: "_Canvas", b, k: int):
     return l, t, r, btm
 
 
-def compose(data: bytes, chars: str = CHARS) -> bytes:
+def _is_aa(f: Font) -> bool:
+    """Antialiased glyphs (mid-tone pixels along the strokes) rather than hard pixel art."""
+    px = [v for r in f.glyph(f.cmap[ord("e")]) for v in r if v]
+    return sum(1 for v in px if 3 <= v <= 12) > len(px) * 0.12
+
+
+def _heart(f: Font, cw: int, lift: int, below: int, outlined: bool, cap) -> tuple:
+    """A filled heart as tall as the capitals, standing on the baseline, in the font's style."""
+    l, t, r, b = cap
+    hh = max(5, b - t)
+    h = hh - (1 if outlined else 0)
+    w = min(round(h * 1.12), cw - (4 if outlined else 2))
+    h = max(h, 5)
+    aa = _is_aa(f)
+    grid = 4
+    ox = 1 if outlined else 0
+    cv = _Canvas(f, f.cmap[ord("e")], lift, below, cw)
+    cv.px = [[0] * cw for _ in range(cv.h)]
+    y_top = cv.top + b - h - (1 if outlined else 0)
+    for py in range(h):
+        for px in range(w):
+            hit = 0
+            for sy in range(grid):
+                for sx in range(grid):
+                    x = ((px + (sx + 0.5) / grid) / w) * 2.3 - 1.15
+                    y = 1.25 - ((py + (sy + 0.5) / grid) / h) * 2.3
+                    if (x * x + y * y - 1) ** 3 - x * x * y ** 3 <= 0:
+                        hit += 1
+            cov = hit / (grid * grid)
+            v = round(cov * 15) if aa else (15 if cov >= 0.5 else 0)
+            if v and 0 <= y_top + py < cv.h and ox + px < cw:
+                cv.px[y_top + py][ox + px] = v
+    before = [[0] * cw for _ in range(cv.h)]
+    if outlined:
+        _outline(cv, before)
+    gw = min(cw, w + (4 if outlined else 0))
+    return [bytes(r) for r in cv.px], (0, gw, gw + 1)
+
+
+def compose(data: bytes, chars: str = CHARS + SYMBOLS) -> bytes:
     """Font with the missing characters of `chars` composed from its own glyphs."""
     f = Font(data)
     if f.magic != b"FFNT" or f.fmt not in (10, 11) or ord("e") not in f.cmap:
@@ -124,6 +165,10 @@ def compose(data: bytes, chars: str = CHARS) -> bytes:
     # ---- plan: base glyph + accent placement, in old cell coordinates
     plans = {}
     for c in todo:
+        if c in SYMBOLS:
+            if ord("H") in f.cmap and f.glyph_count > 1000:     # not the tight credits font
+                plans[c] = ("heart", None, None)
+            continue
         if c in _LIGATURES or c in _SLASHED or c in _TURNED:
             base = (_LIGATURES.get(c) or _SLASHED.get(c) or _TURNED.get(c))
             if all(ord(b) in f.cmap for b in base):
@@ -166,28 +211,39 @@ def compose(data: bytes, chars: str = CHARS) -> bytes:
                            if kind == "accent" and m != "cedilla"])
     want_below = max([0] + [box(base)[3] + len(CEDILLA) - f.ch for kind, base, m in plans.values()
                             if kind == "accent" and m == "cedilla"])
-    cell = None
-    for cw in ([lig_w, f.cw] if lig_w > f.cw else [f.cw]):
-        total = f.glyph_count + len(plans)
-        extra = 0                           # rows the sheet can still give
-        while extra < want_lift + want_below and capacity(cw, f.ch + extra + 1) >= total:
-            extra += 1
-        if capacity(cw, f.ch + extra) < total:
-            continue
-        if cw > f.cw and extra < min(want_lift + want_below, 2):
-            continue                        # rather lose the ligatures than the accents
-        below = min(want_below, max(0, extra - want_lift))     # accents above come first
-        lift = extra - below
-        ch = f.ch + extra
-        cell = (cw, ch, f.sw // (cw + 1), f.sh // (ch + 1))
-        break
-    if cell is None:
+    BLANKS = 11                            # fontimport.add_blank still needs room after us
+
+    def find_cell(n_new):
+        for cw in ([lig_w, f.cw] if lig_w > f.cw else [f.cw]):
+            total = f.glyph_count + n_new + BLANKS
+            extra = 0                           # rows the sheet can still give
+            while extra < want_lift + want_below and capacity(cw, f.ch + extra + 1) >= total:
+                extra += 1
+            if capacity(cw, f.ch + extra) < total:
+                continue
+            if cw > f.cw and extra < min(want_lift + want_below, 2):
+                continue                        # rather lose the ligatures than the accents
+            below = min(want_below, max(0, extra - want_lift))     # accents above come first
+            lift = extra - below
+            ch = f.ch + extra
+            return lift, below, (cw, ch, f.sw // (cw + 1), f.sh // (ch + 1))
+        return None
+
+    found = find_cell(len(plans))
+    if found is None and any(k == "heart" for k, _, _ in plans.values()):
+        plans = {c: v for c, v in plans.items() if v[0] != "heart"}     # the heart is optional
+        found = find_cell(len(plans))
+    if found is None:
         return data
+    lift, below, cell = found
     cw = cell[0]
 
     # ---- draw
     glyphs = {}
     for c, (kind, base, mark) in plans.items():
+        if kind == "heart":
+            glyphs[ord(c)] = _heart(f, cw, lift, max(0, below), outlined, box("H"))
+            continue
         src = "i" if base == "ı" else base[0]
         cv = _Canvas(f, f.cmap[ord(src)], lift, max(0, below), cw)
         before = [r[:] for r in cv.px]

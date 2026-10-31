@@ -511,6 +511,7 @@ TALK_WIDE_2D = {
 }
 # battle_2d.pack has its own win_talk_2d (text pane 338 px at x 1 in a frame the battle sizes
 # itself): the widening above moved its text onto the frame (user report 2026-10-16)
+PROFILE_LABEL_MAX = 90.0     # px: label panes of the *_lw_dive profile layouts (80 px wide)
 TALK_WIDE_SKIP_PACKS = ("/ui/battle_2d.pack",)
 # 2D mode with the screens swapped (Y "Swap map"): the field and its talk window are on the
 # 320 px lower screen (win_talk_lw_2d, text pane 300 px at x 2; common_2d and common_2way). Only
@@ -967,6 +968,14 @@ def _patch_pack(original: bytes, rows: list, opts: ExportOptions, report: Export
                     lay.mark_multi = opts.runtime_fit_multi
                     lay.force_multi = FIT_MULTI_PANES.get(base, set())
                     lay.narrow_fit = True
+                    if base.endswith("_lw_dive") and runtime is not None:
+                        # StreetPass / Draconian profile rows (label left, right-aligned value):
+                        # the label panes are long, their text is not, so a long value
+                        # ("Slot Machines") only has to stay clear of the label's text
+                        from .metrics import line_widths as _lw
+                        f12 = runtime[1]["3D12"]
+                        lay.label_max = PROFILE_LABEL_MAX
+                        lay.text_px = lambda t, f=f12: _lw(t, f)[0] * 13.0 / f.width
                 lay.squeeze = squeeze.get(n.name, {})
                 lay.crisp = crisp.get(n.name, set())
                 if runtime is not None and len(runtime) > 2:

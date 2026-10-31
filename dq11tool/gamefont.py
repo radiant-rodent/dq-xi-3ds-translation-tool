@@ -39,7 +39,18 @@ MESSAGE_MAX_UNITS = 255
 # of items, "can't use that here", camp menu messages. Their Japanese is at most 2 lines, so the
 # table-based estimate gave a 2-line box narrower than the window (verified in game 2026-10-15:
 # 3 lines of 321 px, no runtime wrap).
-TALK_WINDOW_TABLES = frozenset({"mainmenu_msg.bxon", "item_msg.bxon", "item_failure_msg.bxon"})
+# 2026-10-31 (user: the hat shop text "was not very wide" in the editor but fills the dialogue box
+# in game): the other UI tables whose strings are 「speech」 lines of an NPC use it as well.
+REFLOW_TABLES = ("battle_act_text.bxon", "passive_skill.bxon", "item.bxon")     # export.REFLOW_FILES
+TALK_WINDOW_TABLES = frozenset({
+    "mainmenu_msg.bxon", "item_msg.bxon", "item_failure_msg.bxon",
+    "boushi_msg.bxon", "casino_prize_msg.bxon", "coinshop_msg.bxon", "medal_prize_msg.bxon",
+    "horserace_recept_msg.bxon", "post_train_msg.bxon", "pre_dive_msg.bxon", "pre_train_msg.bxon",
+    "seren_hint_msg.bxon", "stpass_callvip_msg.bxon", "stpass_navi_msg.bxon",
+    "spirit_talk_param.bxon",
+    # more message tables of packs that carry the dialogue window (talk_3d_up / talk_2d_up)
+    "dive_msg.bxon", "dive_sortie_msg.bxon", "poker_msg.bxon", "roulette_msg.bxon", "stamp_msg.bxon",
+    "past_altar_msg.bxon", "recipe_get_msg.bxon", "save_point_msg.bxon", "spirit_capture_msg.bxon"})   # the Tockle spirits (Opapp...) talk in the dialogue window too
 
 
 def _talk_table(e) -> bool:
@@ -381,9 +392,33 @@ class GameFonts:
     def fits(self, sid: int, source: str, translation: str) -> bool:
         return self.overshoot(sid, source, translation) == 0
 
+    def reflowed(self, sid: int) -> bool:
+        """Skill / spell / item descriptions: the export drops their line breaks (export.is_description)
+        and the game wraps them to the box itself, so only the wrapped text has to fit."""
+        if getattr(self, "_reflow", None) is None:
+            q = ",".join("?" * len(REFLOW_TABLES))
+            self._reflow = {r[0] for r in self.project.db().execute(
+                f"SELECT DISTINCT source_id FROM entry WHERE entry IN ({q})", REFLOW_TABLES)}
+        return sid in self._reflow
+
+    def runtime_text(self, sid: int, source: str, translation: str) -> str:
+        """The text as the game lays it out: a description re-wrapped to its box."""
+        if (translation and self.reflowed(sid) and "{CR}" not in translation and "{PAGE}" not in translation
+                and self.get(sid, source)["lines"] > 1):
+            flat = re.sub(r" *\n *", " ", translation)
+            return wrap(flat, source, self.font(sid), width=self.get(sid, source)["width"])
+        return translation
+
     def overshoot(self, sid: int, source: str, translation: str) -> float:
         """0 when it fits; otherwise relative excess width plus extra lines."""
         lim = self.get(sid, source)
+        translation = self.runtime_text(sid, source, translation)
+        if sid in self.bubbles():
+            # the runtime fit narrows a bubble line down to the narrowest glyph level: only a line
+            # that is wider even then (or a third line) is a problem; bubble.problems() says the rest
+            tw = max(line_widths(translation, self.font(sid)))
+            lines = len(translation.strip("\n").split("\n"))
+            return max(0, tw - bubble.PANE_WIDTH / bubble.SQUEEZE_MIN) / bubble.PANE_WIDTH + max(0, lines - lim["lines"])
         flat = translation.replace("{PAGE}", "\n")
         tw = line_widths(flat, self.font(sid))
         pages = translation.split("{PAGE}") if lim["paged"] else [translation]

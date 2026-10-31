@@ -121,6 +121,11 @@ class Bflyt:
         self.mark_fit: set[str] | None = None
         self.mark_multi = True
         self.force_multi: set[str] = set()   # boxes marked FIT_MARKER_MULTI although box_holds says no
+        # profile-style rows (label left, right-aligned value): set by the exporter for layouts
+        # whose labels are long panes with a short text. text_px(text) -> px of the text at the
+        # layout's font size; the label pane then counts as its text wide and a value is kept clear of it
+        self.label_max = LABEL_MAX
+        self.text_px = None
         self.narrow_fit = False     # the runtime fit switches to narrow glyphs: no static squeeze there
 
     def _fonts(self) -> list[str]:
@@ -329,6 +334,9 @@ class Bflyt:
             t = (new_texts or {}).get(n[0])
             if t is None:
                 return n[8]
+            if self.text_px:
+                vis = "".join(c for c in t.split("\n")[0] if ord(c) >= 0x20 and not 0xE000 <= ord(c) < 0xF900)
+                return self.text_px(vis) * geo[n[0]][1]
             fsx = struct.unpack_from("<f", d, self.sections[n[0]][1] + 0x70)[0]
             vis = [c for c in t.split("\n")[0] if ord(c) >= 0x20 and not 0xE000 <= ord(c) < 0xF900]
             return sum(fsx if ord(c) >= 0x2000 else fsx * LATIN_WIDTH for c in vis)
@@ -369,7 +377,7 @@ class Bflyt:
                         continue
                     if n[7] == 1:                # left-aligned: its text starts at its left edge
                         start = n[2]
-                    elif n[7] == 2 and n[8]:     # right-aligned value: about its placeholder's width
+                    elif n[7] == 2 and n[8] and not self.text_px:   # right-aligned value: about its placeholder's width
                         start = n[3] - n[8] * VALUE_ROOM
                     else:
                         continue
@@ -380,9 +388,9 @@ class Bflyt:
                 for n in texts:
                     if n is not b and n[7] == 1 and same_row(b, n) \
                             and parent.get(n[0]) == parent.get(i) \
-                            and n[2] < left + 8 and left < n[3] < right - 8 and n[3] - n[2] <= LABEL_MAX:
+                            and n[2] < left + 8 and left < n[3] < right - 8 and n[3] - n[2] <= self.label_max:
                         # the label pane (labels are short panes; its text may be set at runtime)
-                        end = n[2] + max(label_width(n), n[3] - n[2]) + NEIGHBOUR_GAP
+                        end = n[2] + (label_width(n) if self.text_px else max(label_width(n), n[3] - n[2])) + NEIGHBOUR_GAP
                         if left < end:
                             new_left = max(new_left, end)
             if (new_left, new_right) == (left, right):
