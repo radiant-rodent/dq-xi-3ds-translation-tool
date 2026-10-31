@@ -205,7 +205,21 @@ def _structural_refs(n: int, words, block_size: dict[int, int], strings: dict,
     pointer only if *every* non-zero value in that column points exactly at a string
     block - a flags field like 0x0000FF00 that hits a string start by coincidence in one
     element fails this test in the others.
+
+    A one-element array has no other elements to fail the test, so its column also has to
+    agree with the other arrays of its kind (reached the same way): a column that holds a
+    non-string value anywhere is not a string pointer in one-element arrays either (60
+    single-line talks' header 00 FF 00 00 was re-pointed like a string; the garbage option
+    bits asked yes/no after the line, issue #1).
     """
+    contra: set = set()
+    _walk(n, words, block_size, strings, stringish, ambiguous, contra, None)
+    return _walk(n, words, block_size, strings, stringish, ambiguous, None, contra)
+
+
+def _walk(n, words, block_size, strings, stringish, ambiguous, collect: set | None, veto: set | None):
+    """collect: gets (kind, column) of every column with a non-string value.
+    veto: such columns of one-element arrays are not string pointers."""
     def u32(p: int):
         if p < 0 or p + 4 > n or p & 3:
             return None
@@ -220,22 +234,24 @@ def _structural_refs(n: int, words, block_size: dict[int, int], strings: dict,
     stringish = stringish if stringish is not None else set(strings)
     ambiguous = ambiguous or set()
     refs: dict[int, list[int]] = {}
-    queue: list[tuple[int, int, int]] = []
+    queue: list[tuple[int, int, int, tuple]] = []
     seen: set[tuple[int, int]] = set()
 
-    def push_array(base: int, count: int):
+    def push_array(base: int, count: int, kind: tuple):
         size = block_size.get(base)
         if size is None or count <= 0 or size % count or (size // count) % 4 or size == 0:
             return False
-        queue.append((base, count, size // count))
+        queue.append((base, count, size // count, kind + (size // count,)))
         return True
 
     root_count, root_target = u32(0x20), rel(0x24)
     if root_count and root_target is not None:
-        push_array(root_target, root_count)
+        push_array(root_target, root_count, ())
 
     while queue:
-        base, count, esize = queue.pop()
+        # kind: how the array was reached (parent columns and element sizes): arrays of one
+        # kind hold the same struct
+        base, count, esize, kind = queue.pop()
         if (base, esize) in seen:
             continue
         seen.add((base, esize))
@@ -260,18 +276,23 @@ def _structural_refs(n: int, words, block_size: dict[int, int], strings: dict,
                     targets.append((t, c))
                 if ok and targets:
                     for t, c in targets:
-                        push_array(t, c)
+                        push_array(t, c, kind + (k,))
                     k += 8
                     continue
             vals = [(p, rel(p)) for p in col]
             nonzero = [(p, t) for p, t in vals if t is not None]
+            if collect is not None and any(t not in stringish for _, t in nonzero):
+                collect.add((kind, k))
             if nonzero and all(t in stringish for _, t in nonzero):
+                if count == 1 and veto and (kind, k) in veto:
+                    k += 4
+                    continue
                 for p, t in nonzero:
                     if t in strings:
                         refs.setdefault(t, []).append(p)
             elif nonzero and all(t in block_size and t not in stringish for _, t in nonzero):
                 for _, t in nonzero:
-                    push_array(t, 1)
+                    push_array(t, 1, kind + (k,))
             k += 4
     return refs, {base for base, _ in seen}
 

@@ -6,7 +6,9 @@ stores every talk as an array of 28-byte line records:
 
     +0x00 u32 count, +0x04 relptr   optional per-line data (gesture / camera commands)
     +0x08 u32 flags                 +0x0C u32 index of the line in the talk
-    +0x10 relptr speaker name       +0x14 relptr text            +0x18 u32 (0)
+    +0x10 relptr speaker name       +0x14 relptr text            +0x18 relptr 2D text or 0
+    (the message window shows +0x18 instead of +0x14 in 2D, code.bin 0x24BA3C -> 0x1C4FF4;
+    82 lines, mostly where the 2D map differs: "Behind the weapon shop..." vs "Up there...")
 
 Tree: root[] (24 B) +0x08 -> talks[] (16 B) +0x00 -> variants[] (12 B) +0x00 -> lines[].
 A line whose text contains U+001F (textcodec.PAGE) becomes several consecutive records: the
@@ -156,29 +158,39 @@ def split_pages(data: bytes) -> tuple[bytes, int]:
         plan = []
         for p, parts in recs:
             if len(parts) == 1:
-                plan.append((p, None, True, True))
+                plan.append((p, None, None, True, True))
                 continue
             text_at = _target(data, p + 0x14)
             if text_at not in placed:
                 placed[text_at] = _place(out, data, text_at, parts, shared)
             pages = placed[text_at]
+            # the 2D text (+0x18) is paged along: page k shows its page k; a page it has none
+            # for gets no 2D text (the 3D page is shown), so translations page both alike
+            alts: list = [None] * len(pages)
+            alt_at = _target(data, p + 0x18)
+            if alt_at is not None:
+                if alt_at not in placed:
+                    placed[alt_at] = _place(out, data, alt_at, _split16(_string_at(data, alt_at)), shared)
+                alts = (placed[alt_at] + [0] * len(pages))[:len(pages)]
             for k, at in enumerate(pages):
-                plan.append((p, at, k == 0, k == len(pages) - 1))
+                plan.append((p, at, alts[k], k == 0, k == len(pages) - 1))
         while len(out) % 4:
             out += b"@"
         out += MARK
         new_base = len(out)
         out += b"\0" * (LINE * len(plan))
-        for idx, (src, text_at, first, last) in enumerate(plan):
+        for idx, (src, text_at, alt_at, first, last) in enumerate(plan):
             q = new_base + LINE * idx
             rec = bytearray(data[src:src + LINE])
             # self-relative pointers: keep the old targets from the new position
-            for f in (0x04, 0x10, 0x14):
+            for f in (0x04, 0x10, 0x14, 0x18):
                 if f == 0x04 and not _u32(data, src):
                     continue
                 t = _target(data, src + f)
                 if t is not None:
                     struct.pack_into("<I", rec, f, (t - (q + f)) & 0xFFFFFFFF)
+            if alt_at is not None:
+                struct.pack_into("<I", rec, 0x18, (alt_at - (q + 0x18)) & 0xFFFFFFFF if alt_at else 0)
             if not first:
                 struct.pack_into("<II", rec, 0, 0, 0)       # gestures stay on the first box
             if not last:
