@@ -528,6 +528,11 @@ TALK_LOWER_2D = {"win_talk_lw_2d": ("txt", "txt_l", "txt_kanban_center")}
 # the plate's frame starts at ~150, the left column ends at ~6. Raised by 3 px vertically with
 # font_size_y=13.5 and line_space=0.5 so 4-line descriptions fit comfortably without touching the bottom frame.
 PANE_GEOMETRY = {
+    # Skill Panel "Hit for a Bonus!": the Japanese line sits in a plate that is squashed to 0.6
+    # horizontally (so are its two text pictures); the English picture is drawn for 1:1 and looked
+    # squashed. Its pictures cancel the squash and the line is centred in the plate
+    "menu_skill_panel_l_atari_3d": ({}, {}, None, None, None,
+                                    {"atari_txt5": {0x44: 1 / 0.6, 0x2C: 0.0}, "atari_txt6": {0x44: 1 / 0.6}}),
     # Item descriptions: the 116 px text pane (3D) and the 106 px pane of the 15 px 2D font are
     # squeezed to 0.75 and 0.6, which gives both the same room (gamefont.ITEM_DESC_PANES)
     # (with the runtime fit the squeeze is off: narrow glyphs instead, Bflyt.narrow_fit).
