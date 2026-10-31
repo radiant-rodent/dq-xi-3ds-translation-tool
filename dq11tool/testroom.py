@@ -20,6 +20,8 @@ build renames the original to TrgRCommand_orig and adds:
     talk only switches the mode (common.SwitchDispMode reloads the field, the hero stays at
     the priest) and the second talk runs the steps.
 The save `user_citra` resumes in front of the Cobblestone priest, so one A press starts it.
+steps2: steps that end the event (LoadCutScene reloads the field) can be followed by a second
+list: OnBeginScene is wrapped too and runs IE_TEST2 once when the field begins after IE_TEST.
 """
 from __future__ import annotations
 
@@ -101,10 +103,14 @@ def _trg(source: Obj) -> Func:
     return a.done()
 
 
-def _event(steps: list, source: Obj, mode: int | None = None) -> Func:
+SECOND_FLAG = 680      # global game flag no script uses (they go up to 656): 1 = steps2 pending
+
+
+def _event(steps: list, source: Obj, mode: int | None = None, arm_second: bool = False) -> Func:
     """steps as native calls. mode (0 = 2D, 1 = 3D): if the game is in the other mode, this
     talk only switches (common.SwitchDispMode: the field reloads in front of the priest) and
-    the next talk runs the steps."""
+    the next talk runs the steps. arm_second: SECOND_FLAG is set first, so the next time the
+    area's field begins (the steps ended the event, e.g. LoadCutScene) IE_TEST2 runs."""
     a = Asm("IE_TEST", ["this"], source)
     jz = None
     if mode is not None:
@@ -112,6 +118,8 @@ def _event(steps: list, source: Obj, mode: int | None = None) -> Func:
         a.emit("LOADINT", 2, mode)
         a.emit("EQ", 2, 2, 1, 0)
         jz = a.emit("JZ", 2, 0)
+    if arm_second:
+        a.call("SetGlobalGameFlag", SECOND_FLAG, 1)
     for st in steps:
         a.call(st[0], *st[1:])
     if jz is not None:
@@ -123,21 +131,55 @@ def _event(steps: list, source: Obj, mode: int | None = None) -> Func:
     return a.done()
 
 
-def inject(data: bytes, steps: list, mode: int | None = None) -> bytes:
-    """The area script (cnut) with the test TrgRCommand + IE_TEST."""
+def _second(steps2: list, source: Obj) -> Func:
+    """IE_TEST2: steps2, once (SECOND_FLAG 1 -> 2)."""
+    a = Asm("IE_TEST2", ["this"], source)
+    a.call("SetGlobalGameFlag", SECOND_FLAG, 2)
+    for st in steps2:
+        a.call(st[0], *st[1:])
+    return a.done()
+
+
+def _begin(source: Obj) -> Func:
+    """OnBeginScene: the original, then IE_TEST2 when IE_TEST armed it."""
+    a = Asm("OnBeginScene", ["this"], source)
+    a.call("OnBeginScene_orig", base=1)
+    a.call("GetGlobalGameFlag", SECOND_FLAG, base=1)     # r1 = flag
+    a.emit("LOADINT", 2, 1)
+    a.emit("EQ", 2, 2, 1, 0)                            # r2 = (flag == 1)
+    jz = a.emit("JZ", 2, 0)
+    a.call("StartEvent", "this.IE_TEST2", base=3)
+    a.f.instructions[jz].arg1 = len(a.f.instructions) - jz - 1
+    return a.done()
+
+
+def _rename(main, name: str):
+    """The slot key and function `name` become `name`_orig (the new function takes the slot)."""
+    key = next(k for k, o in enumerate(main.literals) if o.value == name)
+    main.literals[key] = S(name + "_orig")
+    main.find(name).name = S(name + "_orig")
+
+
+def inject(data: bytes, steps: list, mode: int | None = None, steps2: list | None = None) -> bytes:
+    """The area script (cnut) with the test TrgRCommand + IE_TEST (and, with steps2, an
+    OnBeginScene that runs IE_TEST2 when the field begins again after IE_TEST)."""
     main = sqbin.parse(data)
     names = [f.name.value for f in main.functions]
     if "TrgRCommand" not in names or "StartEvent" not in names:
         raise ValueError("area script without TrgRCommand / StartEvent")
+    if steps2 and "OnBeginScene" not in names:
+        raise ValueError("area script without OnBeginScene (needed for steps2)")
     ins = main.instructions
-    # the slot key of the original TrgRCommand becomes TrgRCommand_orig
-    key = next(k for k, o in enumerate(main.literals) if o.value == "TrgRCommand")
-    main.literals[key] = S("TrgRCommand_orig")
-    main.find("TrgRCommand").name = S("TrgRCommand_orig")
+    _rename(main, "TrgRCommand")
+    if steps2:
+        _rename(main, "OnBeginScene")
     newslot = next(k for k, i in enumerate(ins) if i.op == OP["NEWSLOT"])
     src = main.functions[0].sourcename
     add = []
-    for fn in (_trg(src), _event(steps, src, mode)):
+    fns = [_trg(src), _event(steps, src, mode, arm_second=bool(steps2))]
+    if steps2:
+        fns += [_second(steps2, src), _begin(src)]
+    for fn in fns:
         main.functions.append(fn)
         main.literals.append(S(fn.name.value))
         add += [Insn(OP["LOAD"], 3, len(main.literals) - 1), Insn(OP["CLOSURE"], 4, len(main.functions) - 1),
@@ -146,15 +188,15 @@ def inject(data: bytes, steps: list, mode: int | None = None) -> bytes:
     n = len(add)
     main.localvarinfos = [(nm, p, a, b + n if b >= newslot else b) for nm, p, a, b in main.localvarinfos]
     main.lineinfos = [(ln, op + n if op >= newslot else op) for ln, op in main.lineinfos]
-    next(i for i in ins if i.op == OP["NEWTABLE"]).arg1 += 2     # size hint
+    next(i for i in ins if i.op == OP["NEWTABLE"]).arg1 += len(fns)     # size hint
     return sqbin.build(main)
 
 
-def patch_pack(pack_bytes: bytes, steps: list, mode: int | None = None) -> bytes:
+def patch_pack(pack_bytes: bytes, steps: list, mode: int | None = None, steps2: list | None = None) -> bytes:
     from .pack import Pack
     p = Pack.parse(pack_bytes)
     for e in p.entries:
         if e.data[:2] == b"\xfa\xfa":
-            e.data = inject(e.data, steps, mode)
+            e.data = inject(e.data, steps, mode, steps2)
             return p.build()
     raise ValueError("no script in pack")

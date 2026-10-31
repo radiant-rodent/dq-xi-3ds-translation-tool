@@ -603,6 +603,14 @@ PANE_GEOMETRY = {
     # icon; the 2D window (right edge at screen x 316) grows 8 px to the left for it
     "win_operation_3d": ({"txt_l1": 50.0}, {"txt_l1": 5.0}),
     "win_operation_2d": ({"win": 86.0}, {"null_win_operation": -8.0, "txt_l1": 4.0}),
+    # 2D Pep Power description (right of the power list): 81x50 px of 2D9 held 3 lines, so the
+    # runtime fit scaled the English to ~0.7 (blurry, issue #4). The window grows 20 px to the
+    # right (the screen edge is 28 px away) and 16 px in height (8 up into the gap under the
+    # battle scene, 8 down above the status windows): 101x66 px, six lines at line space 0,
+    # which most descriptions fill with narrow glyphs only
+    "win_renkei3_2d": ({"win": 120.0, "txt_l1": 101.0}, {},
+                       {"null_win_renkei3": (8.0, 0.0), "win": (0.0, 16.0), "txt_l1": (0.0, 16.0)},
+                       {"txt_l1": (11.0, 0.0)}),
 }
 # Text boxes the runtime fit scales although their Japanese placeholder overflows them
 # (Bflyt.force_multi). 2D Pep Power description: 4 lines of placeholder in a 3-line 81x50 pane,

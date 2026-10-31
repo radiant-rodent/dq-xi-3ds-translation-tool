@@ -366,6 +366,28 @@ the story): the run's save gets the line-up (0x3E04), its count (0x6580), the jo
 (global flags 325-332) and Follow Orders tactics (record +0x1C = 5), and the arena record 25
 gets the battle settings of story battle 5 (`battleparam.FREE_PARTY_FROM`), or the hero
 fights alone. The stat preset (`--party`) then covers every member.
+`--poke "0x32=2700,..."` writes raw bytes into the run's save (slot 1 offsets, hex values).
+`walk:L:0.3` in `--inputs` / `--pre` moves the hero with the circle pad (U D L R UL UR DL DR).
+
+Recipes (2026-10-31):
+- **Any NPC talk without walking**: `--steps "IEMessageSetupEx RC A B C D; MessageLoop -1;
+  MessageEnd"` plays region character RC's talk whose header (talk record +8..+11) is the bytes
+  A B C D (e.g. Cole's mother's first talk after the Tor: `18 0 11 4 1`; the stables girl
+  crying: `27 0 14 1 1`). `IEMessageSetup RC` plays the talk the save's story state picks.
+  Only the scripted message path: NPCs without a script talk natively, which this does not
+  reproduce exactly.
+- **A cutscene, then something else**: `--steps "LoadCutScene N" --steps2 "..."`. N = index in
+  `gamecmn.pack:cutscene_param.bxon` (36-byte records, +0 name; a_010_cs_093 = 10,
+  a_010_cs_105 = 12). The cutscene ends the event and reloads the field; `testroom` then runs
+  the steps2 from the area's `OnBeginScene` (global flag 680, unused by the game, arms it). The
+  screen may still be black (add `StartFadeInDefault; WaitAllFade`); the text log is complete.
+- **Pep Powers in battle** (2D/3D description boxes): `battle LABEL --mode 2d --enemies Golem
+  --party godlike --lineup 0,1 --gold 100 --poke 0x32=2700` gives the hero a Pep pop (item 39,
+  item list slot 7) and clears the Draconian flags (Bashful skips turns). Inputs: `wait:8,A`
+  (Fight), `RIGHT,DOWN,A` (Items), `RIGHT,RIGHT,DOWN,A` (page 2, Pep pop), `A` (Everyone),
+  `A,A` (Erik: Attack, target), `wait:20` (the turn), then `UP,A` opens Pep Powers at the top
+  of the first menu, `A` picks the Hero: power list + description. Do not press A after the
+  pep turn without UP first: it picks Fight.
 
 How it works:
 - **Saves per display mode** (`scenario.SAVES`): `user_citra` (2way: 3D top + 2D bottom, the

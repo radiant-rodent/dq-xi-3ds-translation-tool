@@ -141,7 +141,8 @@ def build(a, steps):
     from dq11tool import battleparam, testroom
     patches = {}
     if steps:       # church: the unchanged script, the A press talks to the real priest
-        patches[testroom.AREA_SCRIPT] = lambda d: testroom.patch_pack(d, steps)
+        steps2 = parse_steps(getattr(a, "steps2", "")) or None
+        patches[testroom.AREA_SCRIPT] = lambda d: testroom.patch_pack(d, steps, steps2=steps2)
     if a.kind == "battle":
         names, _ = monsters_table()
         party = battleparam.parse_party(names, a.enemies)
@@ -227,10 +228,20 @@ def set_lineup(d: bytearray, spec: str) -> None:
             d[GLOBAL_FLAGS_AT + (332 if r == 27 else 324 + r)] = 1
 
 
-def make_save(mode: str, gold: int | None = None, rename: str = "", lineup: str = "", base: str | None = None):
+def poke_save(d: bytearray, spec: str) -> None:
+    """--poke "0xFC=00007a44,0x3E04=00ff": raw bytes (hex) written at slot offsets."""
+    for item in filter(None, (s.strip() for s in spec.split(","))):
+        at, val = item.split("=", 1)
+        raw = bytes.fromhex(val)
+        at = int(at, 0)
+        d[at:at + len(raw)] = raw
+
+
+def make_save(mode: str, gold: int | None = None, rename: str = "", lineup: str = "", base: str | None = None,
+              poke: str = ""):
     """The run's save: a copy of the mode's base save, or `base` (checked: its mode byte matches),
-    optionally with more gold (there is no script call that adds gold), renamed members and
-    another party line-up."""
+    optionally with more gold (there is no script call that adds gold), renamed members,
+    another party line-up and raw byte edits (--poke)."""
     import roomscan
     dst = os.path.join(az.SAVES, RUN_SAVE)
     if os.path.isdir(dst):
@@ -248,7 +259,9 @@ def make_save(mode: str, gold: int | None = None, rename: str = "", lineup: str 
         print("renamed", rename_members(d, rename), "stored names")
     if lineup:
         set_lineup(d, lineup)
-    if gold is not None or rename or lineup:
+    if poke:
+        poke_save(d, poke)
+    if gold is not None or rename or lineup or poke:
         open(p, "wb").write(roomscan.fix_crc(d))
 
 
@@ -344,6 +357,9 @@ class Run:
             elif tok.startswith("hold:"):              # hold:DOWN:0.4 (D-pad walk: 2way talk on the 2D screen)
                 _, b, sec = tok.split(":")
                 self.crash = self.s.hold(b, float(sec)) or self.s.crashed()
+            elif tok.startswith("walk:"):              # walk:L:0.5 (circle pad: U D L R UL UR DL DR)
+                _, d, sec = tok.split(":")
+                self.crash = self.s.walk(d, float(sec)) or self.s.crashed()
             elif tok.startswith("shot"):
                 self.shot(tok[5:] if ":" in tok else "")
             else:
@@ -372,7 +388,7 @@ def run(a) -> int:
         # inn: the priest charges 999 G; 5000 G or more on load earns the "Gold Magnet"
         # accolade (a popup at spawn), so stay below
         gold = a.gold if a.gold is not None else (4999 if a.kind == "inn" else None)
-        make_save(a.mode, gold, a.rename, a.lineup, a.base)
+        make_save(a.mode, gold, a.rename, a.lineup, a.base, a.poke)
         meta["gold"] = gold if gold is not None else "save (57)"
         if os.path.exists(azctl.STATE) and _alive():
             azctl.main(["stop"])
@@ -454,11 +470,14 @@ def parser():
     ap.add_argument("--zone", default=None, help="battle zone (hex/int, see `zones`)")
     ap.add_argument("--id", type=int, default=1, help="shop: fieldcmn shop.bxon record (shopparam copies it over all)")
     ap.add_argument("--steps", default="", help="native calls for kind=steps")
+    ap.add_argument("--steps2", default="", help="native calls for the NEXT talk (after --steps ended the event, "
+                                                 "e.g. LoadCutScene N)")
     ap.add_argument("--inputs", default=None, help="override the inputs after the talk")
     ap.add_argument("--pre", default="", help="inputs before the talk (2D: Y,wait:2 swaps the screens)")
     ap.add_argument("--gold", type=int, default=None, help="gold in the save (inn: 4999; >= 5000 earns an accolade at load)")
     ap.add_argument("--lineup", default="", help="party line-up in the save: record numbers, e.g. 0,1,2,3 (Hero Erik Veronica Serena)")
     ap.add_argument("--rename", default="", help="stored member names OLD=NEW,... (NEW longer than 6: its namefix code)")
+    ap.add_argument("--poke", default="", help="raw save bytes OFFSET=HEX,... (slot 1 Data0 offsets)")
     ap.add_argument("--base", default=None, help="base save in _emutest/saves instead of the mode's (e.g. azpro_data0, 2way)")
     ap.add_argument("--keep", action="store_true", help="leave the emulator running")
     ap.add_argument("--pure-code", action="store_true", help="bisect: unpatched executable (test hook, text log, grammar pass)")
