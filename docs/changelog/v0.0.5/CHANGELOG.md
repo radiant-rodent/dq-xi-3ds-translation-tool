@@ -22,19 +22,30 @@ LayeredFS patch for the Dragon Quest XI (3DS) English translation. The [web patc
 
 ## Textures
 
-Everything that is drawn as an image in the casino, races and a few menus now has English lettering. Where the PC version has official artwork it is used, the rest is drawn in the style of the original.
+Everything that is drawn as an image in the casino, the horse races and a few menus now has English lettering. Where the PC version has official artwork it is used, the rest is drawn in the style of the original.
 
-- **Horse race**: Start!!, Final Stretch!!, New Best Time!!, Nice Work!, the rank counters (1st, 2nd, 3rd, 4th), the Dash label with its gauge and flash, the Stamina gauge label.
-- **Slot machines**: FREE SPIN, SILVER SPIN, JACKPOT, the Set Bet / Start / Quit buttons.
-- **Roulette**: WIN!, MISS, SPIN!, the Move Cursor / Start / Set Bet / Bet x10 buttons, the payout display above the wheel.
-- **Poker**: all hand names (Two Pair up to Royal Straight Flush, Five of a Kind, Royal Jelly Flush), Double Up, Too Bad..., Draw, the payout table, the Set Bet / Start / Quit / Deal buttons and the Change / Keep plates.
-- **Other casino lettering**: COINS!, NEW ITEM!.
-- **Menus**: "Allocate All" and "Hit for a Bonus!" on the skill panel, the Skip icons, "Back" in the dungeon, Start!! of the Draconian Quest, the "Downtown Heliodor" location banner, an image in the credits.
-- **Latin name keyboard** in every part of the game that has a name entry.
+- **Horse race**: "And They're Off!", "Last Lap!", "New Record!", "Nice Work!" at the finish, the rank counters (1st, 2nd, 3rd, 4th), the Stamina gauge with its label, bar and flash.
+- **Slot machines**: "Free Spins!", "Metal Mode!", "JACKPOT", the Set Bet / Start / Quit buttons.
+- **Roulette**: "You Win!", "Too Bad...", "No More Bets!", the Move Cursor / Start / Set Bet / Bet x10 / Quit buttons, the payout display above the wheel (Payout, x27 ... x2, Chest, Result).
+- **Poker**: all hand names (Two Pair up to Royal Straight Flush, Five of a Kind, Royal Jelly Flush), "Stake Doubled!", "Tough Luck!", "Snap!", the payout table, the Set Bet / Start / Quit / Deal buttons and the Change / Keep plates.
+- **Other casino lettering**: "COINS!" and "Item Earned!".
+- **Menus**: "Allocate All" and "Hit for a Bonus!" on the skill panel, the Skip icons, "Back" in the dungeon, "Start!!" of the Draconian Quest, the "Downtown Heliodor" location banner, the credits caption ("Game Design & Scenario"), "Close map" / "Swap map" / "Show/Hide Objective" on the field maps (every map has its own copy), and the Latin name keyboards with their accented letters.
 
 ![Race lettering before and after](https://raw.githubusercontent.com/radiant-rodent/dq-xi-3ds-translation-tool/v0.0.5/docs/changelog/v0.0.5/race_lettering.png)
 
 ![Casino lettering before and after](https://raw.githubusercontent.com/radiant-rodent/dq-xi-3ds-translation-tool/v0.0.5/docs/changelog/v0.0.5/casino_lettering.png)
+
+Menus and labels (as stored in the game's image files):
+
+![Menus and labels](https://raw.githubusercontent.com/radiant-rodent/dq-xi-3ds-translation-tool/v0.0.5/docs/changelog/v0.0.5/menus_and_labels.png)
+
+Casino buttons and tables:
+
+![Casino buttons and tables](https://raw.githubusercontent.com/radiant-rodent/dq-xi-3ds-translation-tool/v0.0.5/docs/changelog/v0.0.5/casino_menus.png)
+
+Race labels and the coin letters (each letter is its own image in the game, so they are shown unjoined):
+
+![Race labels and coin letters](https://raw.githubusercontent.com/radiant-rodent/dq-xi-3ds-translation-tool/v0.0.5/docs/changelog/v0.0.5/race_and_coins.png)
 
 ## Translation tool
 
