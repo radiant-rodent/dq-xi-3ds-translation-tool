@@ -272,6 +272,14 @@ def create_app(workdir: str) -> Flask:
             where.append("s.id IN (SELECT source_id FROM pc_match WHERE rank = 0 AND kind = 'fuzzy')")
         elif pc == "none":
             where.append("s.id NOT IN (SELECT source_id FROM pc_match)")
+        bub = a.get("bubble")
+        if bub in ("only", "not"):
+            from . import bubble
+            ids = bubble.only_sources(project) if bub == "only" else None
+            if bub == "only":
+                where.append("s.id IN (%s)" % (",".join(map(str, sorted(ids))) or "-1"))
+            else:
+                where.append("s.id NOT IN (%s)" % (",".join(map(str, sorted(bubble.only_sources(project)))) or "-1"))
         q = (a.get("q") or "").strip()
         if q:
             scope = a.get("scope", "all")
@@ -338,6 +346,7 @@ def create_app(workdir: str) -> Flask:
                  box_width=box["width"], box_lines=box["lines"], max_chars=box["max_chars"],
                  box_auto_width=box["auto_width"], box_auto_lines=box["auto_lines"],
                  help_window=box["help_window"], help_max=box["help_max"])
+        d["bubble"] = r["id"] in gf.bubbles()
         if gf.source_font(r["id"]) == gamefont.MESSAGE_FONT and not gf.name_field(r["id"]):
             # the 2D-mode message windows (top screen 1:1, lower screen condensed): same line width
             d["windows_2d"] = [{"font": f, "width": w} for f, w in gamefont.MESSAGE_2D]
@@ -392,6 +401,8 @@ def create_app(workdir: str) -> Flask:
                                 (first["id"],)).fetchone(), font) if first else dict(r)
         d.update(occurrences_list=occ, neighbors=neighbors, pc=pcref.suggestions(project, sid),
                  game_font=game_fonts().entry_font(first) if first else gamefont.MESSAGE_FONT)
+        if d.get("bubble"):
+            d["game_font"] = bubble_font()
         return jsonify(d)
 
     @app.post("/api/string/<int:sid>")
@@ -463,6 +474,20 @@ def create_app(workdir: str) -> Flask:
         width = body.get("width")
         return jsonify({"text": wrap(body.get("text", ""), body.get("source", ""), font,
                                      width=width, lines_per_page=body.get("lines"))})
+
+    def bubble_font():
+        from . import bubble
+        return bubble.FONT
+
+    @app.post("/api/bubble")
+    def do_bubble():
+        """A speech-bubble text as the exporter writes it (bubble.export_text) + its problems."""
+        from . import bubble
+        font = fonts().fonts[bubble.FONT]
+        text = (request.json or {}).get("text", "")
+        out = bubble.export_text(text, font) if text else ""
+        return jsonify({"text": out, "problems": bubble.problems(out, font) if out else [],
+                        "reflowed": out != text})
 
     @app.post("/api/measure")
     def do_measure():

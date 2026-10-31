@@ -17,7 +17,7 @@ import os
 import re
 import threading
 
-from . import boxfit
+from . import boxfit, bubble
 from .metrics import FontSet, avg_char_width, line_widths, page_lines, wrap, wrap_pages, wrap_paged
 from .textcodec import encode_str
 
@@ -175,7 +175,15 @@ class GameFonts:
             for e in self.project.db().execute("SELECT source_id, kind, file, entry, member, loc, category FROM entry"):
                 fonts.setdefault(e["source_id"], set()).add(self.entry_font(e))
             self._source = {sid: (next(iter(fs)) if len(fs) == 1 else MENU_FONT) for sid, fs in fonts.items()}
+        if sid in self.bubbles():
+            return bubble.FONT
         return self._source.get(sid, MENU_FONT)
+
+    def bubbles(self) -> set[int]:
+        """Sources shown only in the speech bubbles over NPC heads (bubble.py)."""
+        if getattr(self, "_bubbles", None) is None:
+            self._bubbles = bubble.only_sources(self.project)
+        return self._bubbles
 
     def talk_only(self, sid: int) -> bool:
         """Every occurrence is in a TALK_WINDOW_TABLES table (shown in the talk window)."""
@@ -362,6 +370,11 @@ class GameFonts:
         budget = per_line if lines < 2 else int(per_line * lines * 0.85)   # wrapping never fills every line
         if lim["slot_chars"] is not None:
             budget = min(budget, lim["slot_chars"])
+        if sid in self.bubbles():
+            width, lines = bubble.PANE_WIDTH, bubble.LINES
+            per_line = max(3, int(width / avg_char_width(font)))
+            budget = int(per_line * lines * 0.85)
+            lim.update(paged=False, slot_chars=None, bubble=True)
         lim.update(width=width, lines=lines, chars_per_line=per_line, max_chars=budget)
         return lim
 
@@ -414,6 +427,8 @@ class GameFonts:
         return self._wrap(sid, source, translation)
 
     def _wrap(self, sid: int, source: str, translation: str) -> str:
+        if sid in self.bubbles():
+            return bubble.layout(translation, self.font(sid))
         lim = self.get(sid, source)
         if self.name_field(sid) and lim["lines"] == 2:
             return self._wrap_name(sid, translation, lim["width"])

@@ -158,7 +158,7 @@ let listSeq = 0;
 async function loadList(keepSelection = false) {
   const f = state.filters;
   const qs = new URLSearchParams({ page: f.page, per: f.per, status: f.status, q: f.q, sort: f.sort,
-    category: f.category, file: f.file, show_hidden: f.show_hidden ? "1" : "0", pc: f.pc, scope: f.scope });
+    category: f.category, file: f.file, show_hidden: f.show_hidden ? "1" : "0", pc: f.pc || "", bubble: f.bubble || "", scope: f.scope });
   const seq = ++listSeq;
   $("#rows").classList.add("loading");
   let r;
@@ -235,6 +235,7 @@ $("#show-hidden").onchange = (e) => { state.filters.show_hidden = e.target.check
 $("#file-filter").onchange = (e) => { state.filters.file = e.target.value; state.filters.page = 1; loadList(); };
 $("#sort").onchange = (e) => { state.filters.sort = e.target.value; state.filters.page = 1; loadList(); };
 $("#pc-filter").onchange = (e) => { state.filters.pc = e.target.value; state.filters.page = 1; loadList(); };
+$("#bubble-filter").onchange = (e) => { state.filters.bubble = e.target.value; state.filters.page = 1; loadList(); };
 $("#prev-page").onclick = () => { state.filters.page--; loadList(); };
 $("#next-page").onclick = () => { state.filters.page++; loadList(); };
 
@@ -283,7 +284,7 @@ function renderDetail() {
     <div class="box-ctl" id="box-ctl"></div>
     <ul class="problems" id="problems"></ul>
     ${renderPc(d)}
-    <div class="preview-head"><h4>In-game preview</h4>
+    <div class="preview-head"><h4>${d.bubble ? "In-game preview: speech bubble over the NPC's head" : "In-game preview"}</h4>
       <select id="pfont" title="Font of the preview (the game uses ${esc(d.game_font || "3D14")} here)">${["3D14", "3D12", "2D14", "2D9", "2D14SH", "credit2D"].map((f) =>
         `<option value="${f}" ${f === state.previewFont ? "selected" : ""}>${f}${f === d.game_font ? " (in game)" : ""}</option>`).join("")}</select></div>
     <div class="preview-wrap"><canvas id="preview"></canvas></div>
@@ -529,6 +530,7 @@ async function updateLive() {
   const font = await loadFont(state.previewFont);
   if (state.detail !== d || !$("#tr")) return;   // another string was selected meanwhile
   const text = $("#tr").value;
+  if (d.bubble) return updateBubble(d, text);
   const srcLines = layout(d.text, font), lines = layout(text, font);
   const sw = Math.max(...srcLines.map((l) => lineWidth(font, l)));
   const tw = Math.max(...lines.map((l) => lineWidth(font, l)));
@@ -560,6 +562,84 @@ async function updateLive() {
     probs.push(...probs2d);
   }
   updateProblems(probs);
+}
+
+// NPC speech bubble (the text over an NPC's head, not the message window): the game breaks a
+// text of more than 8 letters after the 8th unless it has its own line break, so the preview
+// shows what the exporter writes (bubble.export_text) in the 130 x 30 px pane, 2 lines.
+const BUBBLE = { width: 130, lines: 2, oneLine: 8 };
+
+async function updateBubble(d, text) {
+  const font = await loadFont("3D12");
+  let r = { text: "", problems: [], reflowed: false };
+  if (text.trim()) r = await api("/api/bubble", { json: { text } });
+  if (state.detail !== d || !$("#tr")) return;
+  const lines = layout(r.text, font);
+  const tw = r.text ? Math.max(...lines.map((l) => lineWidth(font, l))) : 0;
+  const chars = r.text.replace(/\{[^{}]*\}/g, "").replace(/\n/g, "").length;
+  $("#stats").innerHTML = `<span title="widest line / the bubble's text pane">width <b class="${tw > BUBBLE.width ? "over" : ""}">${tw}px</b> / ${BUBBLE.width}px</span>
+    <span>lines <b class="${lines.length > BUBBLE.lines ? "over" : ""}">${r.text ? lines.length : 0}</b> / ${BUBBLE.lines}</span>
+    <span title="the game cuts a longer text without a line break after the 8th letter">${chars} letters${chars > BUBBLE.oneLine ? " → 2 lines" : ""}</span>`;
+  drawBubble(r.text, font);
+  const need = d.text.match(/\{v:[0-9A-Fa-f]+\}/g) || [], have = text.match(/\{v:[0-9A-Fa-f]+\}/g) || [];
+  const probs = [];
+  if (text) {
+    const miss = need.filter((t) => !have.includes(t)); if (miss.length) probs.push("missing tags: " + [...new Set(miss)].join(" "));
+    const extra = have.filter((t) => !need.includes(t)); if (extra.length) probs.push("unknown tags: " + [...new Set(extra)].join(" "));
+    const missingGlyphs = [...new Set([...text.replace(/\{[^{}]*\}/g, "")].filter((c) => c !== "\n" && !font.glyphs[c.codePointAt(0)]))];
+    if (missingGlyphs.length) probs.push("characters not in the game font: " + missingGlyphs.join(" "));
+    probs.push(...r.problems);
+    if (r.reflowed) probs.push("the exporter re-breaks this line as shown (Auto-wrap writes it into the text)");
+  }
+  updateProblems(probs);
+}
+
+async function drawBubble(text, font) {
+  const canvas = $("#preview");
+  if (!canvas) return;
+  const lines = layout(text, font);
+  const scale = 2, lh = 13, bw = BUBBLE.width, widest = Math.max(1, ...lines.map((l) => lineWidth(font, l)));
+  const two = lines.length > 1 || text.replace(/\{[^{}]*\}/g, "").length > BUBBLE.oneLine;
+  // window sizes from the game's animations (hud_balloon_3d balloon1_N): a one-line bubble is
+  // 12 * letters + 8 px wide (2..9 letters) x 22 high, a two-line one 128 x 34 (the visible
+  // fill is ~4 px lower than that: measured in game)
+  const n = text.replace(/\{[^{}]*\}/g, "").replace(/\n/g, "").length;
+  const winW = two ? 128 : 12 * Math.max(2, n) + 8, winH = two ? 30 : 18;
+  const W = 150, H = winH + 22;
+  canvas.width = W * scale; canvas.height = H * scale; canvas.style.width = (W * scale) + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  ctx.scale(scale, scale);
+  ctx.fillStyle = "#26382a"; ctx.fillRect(0, 0, W, H);                  // dark grass behind the bubble
+  const x0 = (W - winW) / 2, y0 = 4;
+  ctx.fillStyle = "rgba(222,222,220,.92)"; ctx.strokeStyle = "#8d8d8f"; ctx.lineWidth = 1;   // translucent light grey like the game
+  ctx.beginPath(); ctx.moveTo(W / 2 - 4, y0 + winH - 2); ctx.lineTo(W / 2, y0 + winH + 4); ctx.lineTo(W / 2 + 4, y0 + winH - 2);
+  ctx.closePath(); ctx.fill(); ctx.stroke();                              // tail first: the bubble covers its base
+  roundRect(ctx, x0, y0, winW, winH, 4); ctx.fill(); ctx.stroke();
+  const off = document.createElement("canvas");                        // glyphs are white masks: tint dark
+  off.width = W * scale; off.height = H * scale;
+  const oc = off.getContext("2d");
+  oc.imageSmoothingEnabled = false; oc.scale(scale, scale);
+  const top = y0 + (winH - lines.length * lh) / 2;
+  // the lines are left-aligned inside a block as wide as the widest one, and the block is centred
+  const block = Math.min(bw, widest);
+  const left0 = (W - block) / 2;
+  lines.forEach((line, li) => {
+    const lw = lineWidth(font, line), sx = lw > bw ? bw / lw : 1;       // too wide: the game narrows the letters
+    let x = left0;
+    for (const u of line) {
+      if (u.wait) continue;
+      if (u.v !== undefined) { const w = glyphWidth(font, u) * sx; oc.fillStyle = "#6b4fb0"; oc.fillRect(x, top + li * lh + 2, w - 1, 10); x += w; continue; }
+      const g = font.glyphs[u.ch.codePointAt(0)];
+      if (!g) { oc.fillStyle = "#e86a5a"; oc.fillRect(x, top + li * lh, 6, 12); x += 8 * sx; continue; }
+      const [sheet, gx, gy, left, gw, cw] = g;
+      if (gw) oc.drawImage(font.images[sheet], gx, gy, gw, font.cell_h, x + left * sx, top + li * lh, gw * sx, font.cell_h);
+      x += cw * sx;
+    }
+  });
+  oc.globalCompositeOperation = "source-in"; oc.fillStyle = "#4a4a50"; oc.fillRect(0, 0, W, H);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(off, 0, 0);
 }
 
 function updateProblems(list) { $("#problems").innerHTML = list.map((p) => `<li>${esc(p)}</li>`).join(""); }

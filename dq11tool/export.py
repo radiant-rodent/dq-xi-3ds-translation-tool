@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from . import blz, cnut, codefix, codestr, fontimport, gamefont, images
 from .bflyt import Bflyt, numeric_text
-from . import ietalk
+from . import bubble, ietalk
 from .bxon import Bxon
 from .ctr.build import build_image, verify_image
 from .ctr.formats import open_image
@@ -170,11 +170,15 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
     by_file: dict[str, list] = defaultdict(list)
     from .metrics import FontSet, fold_to_font, line_widths
     game_font = FontSet.for_project(project).fonts["3D14"]
+    bubble_font = FontSet.for_project(project).fonts[bubble.FONT]
+    bubble_ids = bubble.entry_ids(project)
     folded = []
     for r in rows:
         r = dict(r)
         r["tr"] = fold_to_font(r["tr"], game_font)   # no accents/hearts in the game fonts
-        if r["kind"] == "bxon":
+        if r["id"] in bubble_ids:
+            r["tr"] = bubble.export_text(r["tr"], bubble_font)   # NPC speech bubble: 2 lines of 130 px
+        elif r["kind"] == "bxon":
             r["tr"] = name_break(r["src"], r["tr"])
         if opts.reflow_descriptions and is_description(r):
             r["tr"] = re.sub(r" *\n *", " ", r["tr"])
