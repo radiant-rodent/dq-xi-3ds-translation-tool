@@ -376,9 +376,11 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
         # A string the extraction has no row for stays Japanese in game: the battle Swap menu's
         # "いれかえ" (0x303134, next to its translated "そうがえ") showed in Japanese (issue #8).
         # It takes the translation of the same Japanese text elsewhere when that is unambiguous.
+        # (layout rows first: executable rows may carry a per-place override such as "Line-Up")
         tr_of: dict[str, set] = defaultdict(set)
-        for r in rows:
-            tr_of[r["src"]].add(r["tr"])
+        for r in sorted(rows, key=lambda r: r["kind"] == "code"):
+            if r["kind"] != "code" or not tr_of[r["src"]]:
+                tr_of[r["src"]].add(r["tr"])
         text_size = struct.unpack_from("<I", exheader, 0x18)[0]
         for cs in codestr.find_strings(code, text_size):
             tr = tr_of.get(cs.raw)

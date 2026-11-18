@@ -408,6 +408,10 @@ ENTRY_FIXES: dict[tuple, str] = {
     (40317, "/ui/battle_2d.pack", "blyt/win_main_2d.bflyt", 10): "Tactics",
     (40317, "/ui/battle_3d.pack", "blyt/win_main_3d.bflyt", 10): "Tactics",
     (40317, "exefs:.code", None, 0x225424): "Tactics",
+    # The battle command いれかえ is "Line-Up" in the PC script (Menu_Battle_List_000_002 / 012_002);
+    # its sub window (win_irekae3) keeps "Swap" (one member for a standby member) and "Swap All"
+    (40310, "exefs:.code", None, 0x224e6c): "Line-Up",
+    (40310, "exefs:.code", None, 0x225438): "Line-Up",
     # かまいたち: the skill "Wind Sickles" (battle text) and the monster Cyclown (official PC
     # ZukanDisplayName)
     (2354, "/gamecmn.pack", None, 55716): "{noun}Cyclown",
