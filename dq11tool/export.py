@@ -373,6 +373,23 @@ def collect_changes(project: Project, opts: ExportOptions, progress=None):
                 continue
             repl[r["loc"]] = (raw, r["capacity"])
             report.applied += 1
+        # A string the extraction has no row for stays Japanese in game: the battle Swap menu's
+        # "いれかえ" (0x303134, next to its translated "そうがえ") showed in Japanese (issue #8).
+        # It takes the translation of the same Japanese text elsewhere when that is unambiguous.
+        tr_of: dict[str, set] = defaultdict(set)
+        for r in rows:
+            tr_of[r["src"]].add(r["tr"])
+        text_size = struct.unpack_from("<I", exheader, 0x18)[0]
+        for cs in codestr.find_strings(code, text_size):
+            tr = tr_of.get(cs.raw)
+            if cs.offset in row_at or codestr.is_debug(cs.raw) or not tr or len(tr) != 1:
+                continue
+            raw = encode_str(next(iter(tr)))
+            if len(raw.encode("utf-16-le")) + 2 > cs.capacity:
+                moves[cs.offset] = (raw, cs.capacity)
+            else:
+                repl[cs.offset] = (raw, cs.capacity)
+            report.applied += 1
         fmt_moves, fmt_problems = codefix.format_moves(code)   # e.g. "%ls %c" ("Slime A")
         moves.update(fmt_moves)
         if repl:
@@ -592,20 +609,15 @@ PANE_GEOMETRY = {
         {"win": 180.0, **{f"txt_c{k}": 65.0 for k in range(1, 4)}, **{f"txt_l{k}": 68.0 for k in range(1, 6)}},
         {**{f"txt_c{k}": 20.0 for k in range(1, 4)}, **{f"null_txt_c{k}": 20.0 for k in range(1, 4)}},
     ),
-    # Item menu "Organise Items" button: the 96 px title centred at x 57 of the 100 px window
-    # began at x 9, under the X icon (x 10-26). Windows widened 15 px to the left (25 covered
-    # the corner of the item list frame); the title sits right of the icon
-    "win_dougu_sort_3d": (
-        {"win": 115.0, "line": 115.0, "txt_title": 85.0},
-        {"null_win_sort": -15.0, "txt_title": 13.5, "txt": 7.5},
-    ),
+    # Item menu "Organise Items" button (hero's item list, one line): the 96 px title centred at
+    # x 57 of the 100 px window began at x 9, under the X icon (x 10-26). Widened 15 px to the
+    # left (25 covered the corner of the item list frame); the title sits right of the icon.
+    # The Item Bag's Filter / Sort windows (win_dougu_sort3_3d / win_dougu_sort_3d) sit over the
+    # right edge of the list and keep the Japanese 100 px: 115 px covered the count column of the
+    # bottom rows (issue #9)
     "win_dougu_sort2_3d": (                       # the one-line variant shown in the item list
         {"win": 115.0, "txt_title": 89.0},
         {"null_win_sort2": -15.0, "txt_title": 10.5},
-    ),
-    "win_dougu_sort3_3d": (
-        {"win": 115.0, "line": 115.0, "txt_title": 85.0},
-        {"null_win_sort3": -15.0, "txt_title": 19.5, "txt": 7.5, "icon_key_r": 15.0},
     ),
     # field prompt ("[Y]:Action", "[A]:Help"): the A/Y icon covers x 9-25 and the text began
     # at x 23 / 25, where the Japanese full-width colon was mostly blank; ":Action" ran under

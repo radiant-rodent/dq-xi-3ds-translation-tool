@@ -385,6 +385,19 @@ FIXES: dict[int, tuple] = {
     9953: ("Infernal\nserpent", "Flame tang"),
     8549: ("The Veil of Tears", "Lovers' veil"),
     11055: ("Snaerose", "Snærose"),
+    # Battle "Swap" window (win_irekae3): いれかえ swaps one battle member for a standby member,
+    # そうがえ opens the whole line-up (all four slots) - both had been "Swap" (issue #8)
+    40311: ("Swap", "Swap All", SQUEEZED),
+    # Pep-up messages (issue #7): the top-screen caption shows 2 lines of ~285 px (3D14 units);
+    # these ran to 3 and the last line fell off the screen. Same wording, shorter stat names.
+    643: (None, "{The}{v:2} becomes pepped up! Strength, resilience and critical hit chance increase!"),
+    648: (None, "{The}{v:2} becomes pepped up! Strength, deftness and evasion increase!"),
+    653: (None, "{The}{v:2} is pepped up! Resilience, magical might and spell crit chance increase!"),
+    658: (None, "{The}{v:2} is pepped up! Resilience, magical mending and spell crit chance increase!"),
+    663: (None, "{The}{v:2} becomes pepped up! Strength, charm and evasion increase!"),
+    668: (None, "{The}{v:2} is pepped up! Magical might, mending and spell crit chance increase!"),
+    673: (None, "{The}{v:2} becomes pepped up! Resilience, agility and critical hit chance increase!"),
+    1217: (None, "{The}{v:2} becomes pepped up! Agility, charm and critical hit chance increase!"),
 }
 
 # One occurrence of a shared string worded differently (entry.override): (source id, file,
